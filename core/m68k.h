@@ -55,10 +55,18 @@ struct m68k_context_
 {
 	uint32_t reg[M68K_REG_COUNT];
 	uint32_t timeout;
-	m68k_function next_func;
+	m68k_function next_func,fetch_ret,effective_ret;
+	m68k_read_handler read_w;
+	m68k_write_handler write_w;
+
+	// current operation data
 	uint32_t opcode;
-	m68k_read_handler read_b,read_w,read_l;
-	m68k_read_handler write_b,write_w,write_l;
+	uint32_t opcode_length;
+	uint32_t fetched_value;
+	uint32_t effective_value;
+	uint32_t effective_address;
+	uint32_t operand;
+	uint32_t operand2;
 };
 
 void m68k_init(m68k_context *m68k);
