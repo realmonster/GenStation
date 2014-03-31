@@ -31,17 +31,94 @@ M68K_FUNCTION(opcode_decode)
 	opcode_table[m68k->opcode](m68k);
 }
 
-#define FETCH(next) m68k->fetch_ret=(next), m68k->timeout = 4, m68k->next_func = fetch
-#define TIMEOUT(time,next) m68k->timeout = (time), m68k->next_func = (next)
-#define FETCH_OPCODE FETCH(opcode_decode)
-#define INVALID do {invalid(m68k); return;} while(0)
+#define FETCH_WORD(next) m68k->fetch_ret=(next), m68k->timeout = 4, m68k->next_func = fetch_word
+#define FETCH_LONG(next) m68k->fetch_ret=(next), m68k->timeout = 4, m68k->next_func = fetch_long
+#define FETCH_OPCODE FETCH_WORD(opcode_decode)
 
-M68K_FUNCTION(fetch)
+#define TIMEOUT(time,next) m68k->timeout = (time), m68k->next_func = (next)
+
+#define READ_BYTE(next) m68k->fetch_ret=(next), m68k->timeout = 4, m68k->next_func = read_byte
+#define READ_WORD(next) m68k->fetch_ret=(next), m68k->timeout = 4, m68k->next_func = read_word
+#define READ_LONG(next) m68k->fetch_ret=(next), m68k->timeout = 4, m68k->next_func = read_long
+
+#define INVALID if (1) {invalid(m68k); return;} else (void)0
+
+#define FETCH_BY_SIZE(size, next) if(1) \
+{ \
+if ((size) == 1) \
+	FETCH_WORD(next); \
+else if ((size) == 2) \
+	FETCH_WORD(next); \
+else if ((size) == 4) \
+	FETCH_LONG(next); \
+else \
+	INVALID; \
+} else (void)0
+
+#define READ_BY_SIZE(size, next) if(1) \
+{ \
+if ((size) == 1) \
+	READ_BYTE(next); \
+else if ((size) == 2) \
+	READ_WORD(next); \
+else if ((size) == 4) \
+	READ_LONG(next); \
+else \
+	INVALID; \
+} else (void)0
+
+M68K_FUNCTION(fetch_word)
 {
 	lprintf("fetch\n");
-	m68k->fetched_value = (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);
+	m68k->fetched_value = m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);
 	m68k->reg[M68K_REG_PC] += 2;
 	m68k->fetch_ret(m68k);
+}
+
+M68K_FUNCTION(fetch_long_2)
+{
+	lprintf("fetch\n");
+	m68k->fetched_value |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);
+	m68k->reg[M68K_REG_PC] += 2;
+	m68k->fetch_ret(m68k);
+}
+
+M68K_FUNCTION(fetch_long)
+{
+	lprintf("fetch\n");
+	m68k->fetched_value = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;
+	m68k->reg[M68K_REG_PC] += 2;
+	TIMEOUT(4, fetch_long_2);
+}
+
+M68K_FUNCTION(read_byte)
+{
+	//lprintf("read\n");
+	m68k->fetched_value = m68k->read_w(m68k, m68k->effective_address);
+	if (m68k->effective_address&1)
+		m68k->fetched_value >>= 8;
+	m68k->fetch_ret(m68k);
+}
+
+M68K_FUNCTION(read_word)
+{
+	//lprintf("read\n");
+	m68k->fetched_value = m68k->read_w(m68k, m68k->effective_address);
+	m68k->fetch_ret(m68k);
+}
+
+M68K_FUNCTION(read_long_2)
+{
+	//lprintf("read\n");
+	m68k->fetched_value |= (uint16_t)m68k->read_w(m68k, m68k->effective_address+2);
+	m68k->fetch_ret(m68k);
+}
+
+M68K_FUNCTION(read_long)
+{
+	//lprintf("read\n");
+	m68k->fetched_value = m68k->read_w(m68k, m68k->effective_address)<<16;
+	TIMEOUT(4, read_long_2);
 }
 
 M68K_FUNCTION(invalid)
@@ -52,44 +129,18 @@ M68K_FUNCTION(invalid)
 
 M68K_FUNCTION(effective_address_1)
 {
-	m68k->effective_value |= (uint16_t)m68k->read_w(m68k,m68k->effective_address+2);
+	m68k->effective_value = m68k->fetched_value;
 	m68k->effective_ret(m68k);
 }
 
 M68K_FUNCTION(effective_address_2)
 {
-	switch (m68k->opcode_length)
-	{
-		case 4: // long
-			if (m68k->effective_address&1)
-				INVALID; // address bus error
-			else
-			{
-				m68k->effective_value = m68k->read_w(m68k,m68k->effective_address)<<16;
-				TIMEOUT(4,effective_address_1);
-			}
-			break;
-		case 2:
-			if (m68k->effective_address&1)
-				INVALID; // address bus error
-			else
-			{
-				m68k->effective_value = m68k->read_w(m68k,m68k->effective_address);
-				m68k->effective_ret(m68k);
-			}
-			break;
-		case 1:
-			m68k->effective_value = m68k->read_w(m68k,m68k->effective_address);
-			if (m68k->effective_address&1)
-				m68k->effective_value >>= 8;
-			m68k->effective_ret(m68k);
-			break;
-		default:
-			INVALID;
-	}
+	m68k->effective_address += (int16_t)m68k->fetched_value;
+	lprintf("ea: ($%04X,??)\n", m68k->fetched_value&0xFFFF);
+	READ_BY_SIZE(m68k->opcode_length, effective_address_1);
 }
 
-M68K_FUNCTION(effective_address_4)
+M68K_FUNCTION(effective_address_3)
 {
 	uint32_t brief = m68k->fetched_value;
 	m68k->effective_address += (int8_t)brief;
@@ -99,40 +150,13 @@ M68K_FUNCTION(effective_address_4)
 		m68k->effective_address += (int32_t)m68k->reg[M68K_REG_D0+((brief>>12)&0xF)];
 	else
 		m68k->effective_address += (int16_t)m68k->reg[M68K_REG_D0+((brief>>12)&0xF)];
-	TIMEOUT(4,effective_address_2);
+	READ_BY_SIZE(m68k->opcode_length, effective_address_1);
 }
 
-M68K_FUNCTION(effective_address_3)
+M68K_FUNCTION(effective_address_4)
 {
-	m68k->effective_address += (int16_t)m68k->fetched_value;
-	lprintf("ea: ($%04X,??)\n", m68k->fetched_value&0xFFFF);
-	TIMEOUT(4,effective_address_2);
-}
-
-M68K_FUNCTION(effective_address_5)
-{
-	m68k->effective_address |= m68k->fetched_value;
-	lprintf("ea: ($%X)\n", m68k->effective_address);
-	TIMEOUT(4,effective_address_2);
-}
-
-M68K_FUNCTION(effective_address_6)
-{
-	m68k->effective_address = m68k->fetched_value<<16;
-	FETCH(effective_address_5);
-}
-
-M68K_FUNCTION(effective_address_7)
-{
-	m68k->effective_value |= m68k->fetched_value;
-	lprintf("ea: #%X\n", m68k->effective_value&(m68k->opcode_length==1?0xFF:~0));
-	TIMEOUT(4,effective_address_2);
-}
-
-M68K_FUNCTION(effective_address_8)
-{
-	m68k->effective_value = m68k->fetched_value<<16;
-	FETCH(effective_address_7);
+	m68k->effective_address = m68k->fetched_value;
+	READ_BY_SIZE(m68k->opcode_length, effective_address_1);
 }
 
 M68K_FUNCTION(effective_address)
@@ -152,7 +176,7 @@ M68K_FUNCTION(effective_address)
 		case 0x10: // (An)
 			lprintf("ea: (a%d)\n",(m68k->opcode&7));
 			m68k->effective_address = m68k->reg[M68K_REG_A0+(m68k->opcode&7)];
-			TIMEOUT(4,effective_address_2);
+			READ_BY_SIZE(m68k->opcode_length, effective_address_1);
 			break;
 		case 0x18: // (An)+
 		{
@@ -160,7 +184,7 @@ M68K_FUNCTION(effective_address)
 			lprintf("ea: (a%d)+\n",(m68k->opcode&7));
 			m68k->effective_address = *r;
 			*r += m68k->opcode_length;
-			TIMEOUT(4,effective_address_2);
+			READ_BY_SIZE(m68k->opcode_length, effective_address_1);
 		}
 			break;
 		case 0x20: // -(An)
@@ -169,57 +193,42 @@ M68K_FUNCTION(effective_address)
 			lprintf("ea: -(a%d)\n",(m68k->opcode&7));
 			*r -= m68k->opcode_length;
 			m68k->effective_address = *r;
-			TIMEOUT(6,effective_address_2);
+			READ_BY_SIZE(m68k->opcode_length, effective_address_1);
+			m68k->timeout = 6;
 		}
 			break;
 		case 0x28: // (d16,An)
 			lprintf("ea: (d16,a%d)\n",(m68k->opcode&7));
 			m68k->effective_address = m68k->reg[M68K_REG_A0+(m68k->opcode&7)];
-			FETCH(effective_address_3);
+			FETCH_WORD(effective_address_2);
 			break;
 		case 0x30: // (d8,An,xn)
 			lprintf("ea: (d8,a%d,xn)\n",(m68k->opcode&7));
 			m68k->effective_address = m68k->reg[M68K_REG_A0+(m68k->opcode&7)];
-			FETCH(effective_address_4);
+			FETCH_WORD(effective_address_3);
 			break;
 		case 0x38:
 			switch (m68k->opcode&7)
 			{
 				case 0: // (xxx).W
-					m68k->effective_address = 0;
-					FETCH(effective_address_5);
+					FETCH_WORD(effective_address_4);
 					break;
 				case 1: // (xxx).L
-					FETCH(effective_address_6);
+					FETCH_LONG(effective_address_4);
 					break;
 				case 2: // (d16,pc)
 					lprintf("ea: (d16,pc)\n");
 					m68k->effective_address = m68k->reg[M68K_REG_PC];
-					FETCH(effective_address_3);
+					FETCH_WORD(effective_address_2);
 					break;
 				case 3: // (d8,pc,xn)
 					lprintf("ea: (d8,pc,xn)\n");
 					m68k->effective_address = m68k->reg[M68K_REG_PC];
-					FETCH(effective_address_4);
+					FETCH_WORD(effective_address_3);
 					break;
 				case 4: // #<data>
 					lprintf("ea: #<data>\n");
-					switch(m68k->opcode_length)
-					{
-						case 1:
-							m68k->effective_value = 0;
-							FETCH(effective_address_7);
-							break;
-						case 2:
-							m68k->effective_value = 0;
-							FETCH(effective_address_7);
-							break;
-						case 4:
-							FETCH(effective_address_8);
-							break;
-						default:
-							INVALID;
-					}
+					FETCH_BY_SIZE(m68k->opcode_length, effective_address_1);
 					break;
 				default:
 					INVALID;
@@ -247,45 +256,22 @@ M68K_FUNCTION(ori_ccr_2)
 
 M68K_FUNCTION(ori_ccr)
 { 
-	FETCH(ori_ccr_2);
+	FETCH_WORD(ori_ccr_2);
 }
 
-M68K_FUNCTION(ori_5)
+M68K_FUNCTION(ori_3)
 {
 	m68k->effective_value |= m68k->operand;
 	lprintf("ori done\n");
 	FETCH_OPCODE;
 }
 
-M68K_FUNCTION(ori_4)
-{
-	lprintf("imm: #$%X\n",m68k->operand);
-	m68k->effective_ret = ori_5;
-	effective_address(m68k);
-}
-
-M68K_FUNCTION(ori_3)
-{
-	m68k->operand |= m68k->fetched_value;
-	ori_4(m68k);
-}
-
 M68K_FUNCTION(ori_2)
 {
-	switch(m68k->opcode_length)
-	{
-		case 1:
-		case 2:
-			m68k->operand = m68k->fetched_value;
-			ori_4(m68k);
-			break;
-		case 4:
-			m68k->operand = m68k->fetched_value<<16;
-			FETCH(ori_3);
-			break;
-		default:
-			INVALID;
-	}
+	m68k->operand = m68k->fetched_value;
+	lprintf("imm: #$%X\n",m68k->operand);
+	m68k->effective_ret = ori_3;
+	effective_address(m68k);
 }
 
 // 00000000sseeeeee
@@ -295,7 +281,7 @@ M68K_FUNCTION(ori)
 	if (!m68k->opcode_length)
 		INVALID;
 	lprintf("ori.%s\n",op_size[(m68k->opcode>>6)&3]);
-	FETCH(ori_2);
+	FETCH_BY_SIZE(m68k->opcode_length, ori_2);
 }
 
 typedef struct
