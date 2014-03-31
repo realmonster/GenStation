@@ -42,6 +42,38 @@
 #define M68K_REG_SR  17
 #define M68K_REG_CCR 17 // low byte SR
 
+#define M68K_FLAG_C_BIT 0 // carry
+#define M68K_FLAG_C_MASK (1<<0)
+#define M68K_FLAG_V_BIT 1 // overflow
+#define M68K_FLAG_V_MASK (1<<1)
+#define M68K_FLAG_Z_BIT 2 // zero
+#define M68K_FLAG_Z_MASK (1<<2)
+#define M68K_FLAG_N_BIT 3 // negative
+#define M68K_FLAG_N_MASK (1<<3)
+#define M68K_FLAG_X_BIT 4 // extend
+#define M68K_FLAG_X_MASK (1<<4)
+
+#define M68K_FLAG_I0_BIT 8 // interupt priority bit 0
+#define M68K_FLAG_I0_MASK (1<<8)
+#define M68K_FLAG_I1_BIT 9 // interupt priority bit 1
+#define M68K_FLAG_I1_MASK (1<<9)
+#define M68K_FLAG_I2_BIT 10 // interupt priority bit 2
+#define M68K_FLAG_I2_MASK (1<<10)
+
+// master/interrupt state (not used in M68000)
+//#define M68K_FLAG_M_BIT 12
+//#define M68K_FLAG_M_MASK (1<<12)
+
+#define M68K_FLAG_S_BIT 13 // supervisor
+#define M68K_FLAG_S_MASK (1<<13)
+
+// trace 0 bit (not used in M68000)
+//#define M68K_FLAG_T0_BIT 14
+//#define M68K_FLAG_T0_MASK (1<<14)
+
+#define M68K_FLAG_T1_BIT 15  // trace 1 bit
+#define M68K_FLAG_T1_MASK (1<<15)
+
 #define M68K_REG_COUNT 18
 
 typedef struct m68k_context_ m68k_context;
