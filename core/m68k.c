@@ -32,6 +32,7 @@ M68K_FUNCTION(opcode_decode)
 }
 
 #define SET_FLAG(bit,val) m68k->reg[M68K_REG_SR] = (m68k->reg[M68K_REG_SR]&(~(1<<(bit))))|((val)<<(bit))
+#define IS_SUPERVISOR (m68k->reg[M68K_REG_SR] & M68K_FLAG_S_MASK)
 
 #define FETCH_WORD(next) m68k->fetch_ret=(next), m68k->timeout = 4, m68k->next_func = fetch_word
 #define FETCH_LONG(next) m68k->fetch_ret=(next), m68k->timeout = 4, m68k->next_func = fetch_long
@@ -49,6 +50,8 @@ M68K_FUNCTION(opcode_decode)
 #define WRITE_LONG(next) m68k->fetch_ret=(next), m68k->timeout = 4, m68k->next_func = write_long
 
 #define INVALID if (1) {invalid(m68k); return;} else (void)0
+#define PRIVILEGED_EXCEPTION INVALID
+#define ADDRESS_EXCEPTION INVALID
 
 #define FETCH_BY_SIZE(size, next) if(1) \
 { \
@@ -197,13 +200,13 @@ M68K_FUNCTION(effective_address)
 	{
 		case 0x00: // Dn
 			lprintf("ea: d%d\n",(m68k->opcode&7));
-			m68k->effective_address = 0;
+			m68k->effective_address = 1;
 			m68k->effective_value = m68k->reg[M68K_REG_D0+(m68k->opcode&7)];
 			m68k->effective_ret(m68k);
 			break;
 		case 0x08: // An
 			lprintf("ea: a%d\n",(m68k->opcode&7));
-			m68k->effective_address = 0;
+			m68k->effective_address = 1;
 			m68k->effective_value = m68k->reg[M68K_REG_A0+(m68k->opcode&7)];
 			m68k->effective_ret(m68k);
 			break;
@@ -245,9 +248,11 @@ M68K_FUNCTION(effective_address)
 			switch (m68k->opcode&7)
 			{
 				case 0: // (xxx).W
+					lprintf("ea: (xxx).w\n");
 					FETCH_WORD(effective_address_4);
 					break;
 				case 1: // (xxx).L
+					lprintf("ea: (xxx).l\n");
 					FETCH_LONG(effective_address_4);
 					break;
 				case 2: // (d16,pc)
@@ -262,7 +267,7 @@ M68K_FUNCTION(effective_address)
 					break;
 				case 4: // #<data>
 					lprintf("ea: #<data>\n");
-					m68k->effective_address = 0;
+					m68k->effective_address = 1;
 					FETCH_BY_SIZE(m68k->opcode_length, effective_address_1);
 					break;
 				default:
@@ -312,24 +317,6 @@ M68K_FUNCTION(effective_address_write)
 	}
 }
 
-M68K_FUNCTION(ori_ccr_3)
-{
-	lprintf("ori.b #$%02X,ccr\n",m68k->fetched_value);
-	FETCH_OPCODE;
-}
-
-M68K_FUNCTION(ori_ccr_2)
-{
-	//if (m68k->fetched_value > 0xFFFF)
-	//    what to do?
-	TIMEOUT(16,ori_ccr_3); // from reference, but I'm not sure
-}
-
-M68K_FUNCTION(ori_ccr)
-{
-	FETCH_WORD(ori_ccr_2);
-}
-
 M68K_FUNCTION(ori_4)
 {
 	lprintf("ori done\n");
@@ -343,15 +330,15 @@ M68K_FUNCTION(ori_3)
 	{
 		if (m68k->effective_address&1)
 		{
-			m68k->effective_value |= (uint32_t)((uint8_t)m68k->operand)<<8;
-			flag_n = (m68k->effective_value>>15)&1;
-			flag_z = (m68k->effective_value&0xFF00?0:1);
-		}
-		else
-		{
 			m68k->effective_value |= (uint8_t)m68k->operand;
 			flag_n = (m68k->effective_value>>7)&1;
 			flag_z = (((uint8_t)m68k->effective_value)?0:1);
+		}
+		else
+		{
+			m68k->effective_value |= (uint32_t)((uint8_t)m68k->operand)<<8;
+			flag_n = (m68k->effective_value>>15)&1;
+			flag_z = (m68k->effective_value&0xFF00?0:1);
 		}
 	}
 	else if (m68k->opcode_length == 2)
@@ -382,7 +369,6 @@ M68K_FUNCTION(ori_2)
 	effective_address(m68k);
 }
 
-// 00000000sseeeeee
 M68K_FUNCTION(ori)
 {
 	m68k->opcode_length = opcode_length[(m68k->opcode>>6)&3];
@@ -390,6 +376,106 @@ M68K_FUNCTION(ori)
 		INVALID;
 	lprintf("ori.%s\n",op_size[(m68k->opcode>>6)&3]);
 	FETCH_BY_SIZE(m68k->opcode_length, ori_2);
+}
+
+M68K_FUNCTION(andi_4)
+{
+	lprintf("andi done\n");
+	FETCH_OPCODE;
+}
+
+M68K_FUNCTION(andi_3)
+{
+	int flag_n, flag_z;
+	if (m68k->opcode_length == 1)
+	{
+		if (m68k->effective_address&1)
+		{
+			m68k->effective_value &= (m68k->operand|0xFF00);
+			flag_n = (m68k->effective_value>>7)&1;
+			flag_z = (((uint8_t)m68k->effective_value)?0:1);
+		}
+		else
+		{
+			m68k->effective_value &= (m68k->operand|0xFF);
+			flag_n = (m68k->effective_value>>15)&1;
+			flag_z = (m68k->effective_value&0xFF00?0:1);
+		}
+	}
+	else if (m68k->opcode_length == 2)
+	{
+		m68k->effective_value &= m68k->operand;
+		flag_n = (m68k->effective_value>>15)&1;
+		flag_z = (((uint16_t)m68k->effective_value)?0:1);
+	}
+	else
+	{
+		m68k->effective_value &= m68k->operand;
+		flag_n = (m68k->effective_value>>31)&1;
+		flag_z = (((uint32_t)m68k->effective_value)?0:1);
+	}
+	SET_FLAG(M68K_FLAG_N_BIT, flag_n);
+	SET_FLAG(M68K_FLAG_Z_BIT, flag_z);
+	SET_FLAG(M68K_FLAG_V_BIT, 0);
+	SET_FLAG(M68K_FLAG_C_BIT, 0);
+	m68k->effective_ret = andi_4;
+	effective_address_write(m68k);
+}
+
+M68K_FUNCTION(andi_2)
+{
+	m68k->operand = m68k->fetched_value;
+	lprintf("imm: #$%X\n",m68k->operand);
+	m68k->effective_ret = andi_3;
+	effective_address(m68k);
+}
+
+M68K_FUNCTION(andi)
+{
+	m68k->opcode_length = opcode_length[(m68k->opcode>>6)&3];
+	if (!m68k->opcode_length)
+		INVALID;
+	lprintf("andi.%s\n",op_size[(m68k->opcode>>6)&3]);
+	FETCH_BY_SIZE(m68k->opcode_length, andi_2);
+}
+
+M68K_FUNCTION(ori_ccr_3)
+{
+	m68k->reg[M68K_REG_CCR] |= (uint8_t)m68k->fetched_value;
+	m68k->reg[M68K_REG_CCR] &= M68K_FLAG_ALL;
+	lprintf("ori.b #$%02X,ccr\n",(uint8_t)m68k->fetched_value);
+	FETCH_OPCODE;
+}
+
+M68K_FUNCTION(ori_ccr_2)
+{
+	TIMEOUT(16,ori_ccr_3); // from reference, but I'm not sure
+}
+
+M68K_FUNCTION(ori_ccr)
+{
+	FETCH_WORD(ori_ccr_2);
+}
+
+M68K_FUNCTION(ori_sr_3)
+{
+	m68k->reg[M68K_REG_CCR] |= m68k->fetched_value;
+	m68k->reg[M68K_REG_CCR] &= M68K_FLAG_ALL;
+	lprintf("ori.w #$%02X,sr\n",(uint16_t)m68k->fetched_value);
+	FETCH_OPCODE;
+}
+
+M68K_FUNCTION(ori_sr_2)
+{
+	TIMEOUT(16,ori_sr_3); // from reference, but I'm not sure
+}
+
+M68K_FUNCTION(ori_sr)
+{
+	if (IS_SUPERVISOR)
+		FETCH_WORD(ori_sr_2);
+	else
+		PRIVILEGED_EXCEPTION;
 }
 
 typedef struct
@@ -404,7 +490,15 @@ opcode_pattern opcode_table_init[] =
 {
 	{0x0000,0x0000,invalid}, // fill all with invalid opcode
 	{0xFF00,0x0000,ori    },
+	{0xFFC0,0x00C0,invalid}, // invalid ori.z
+	{0xFF3C,0x003C,invalid}, // invalid ori
+	{0xFF3A,0x003A,invalid}, // invalid ori
 	{0xFFFF,0x003C,ori_ccr},
+	{0xFFFF,0x007C,ori_sr },
+	{0xFF00,0x0200,andi   },
+	{0xFFC0,0x02C0,invalid}, // invalid andi.z
+	{0xFF3C,0x023C,invalid}, // invalid andi
+	{0xFF3A,0x023A,invalid}, // invalid andi
 	{0x0000,0x0000,0} // end of list determinated by null function
 };
 

@@ -74,6 +74,9 @@
 #define M68K_FLAG_T1_BIT 15  // trace 1 bit
 #define M68K_FLAG_T1_MASK (1<<15)
 
+// T-S--III---XNZVC
+#define M68K_FLAG_ALL 0xA71F
+
 #define M68K_REG_COUNT 18
 
 typedef struct m68k_context_ m68k_context;
