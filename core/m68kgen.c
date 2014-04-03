@@ -115,44 +115,10 @@ int invalid(void)
 	return func_by_name("invalid");
 }
 
-int gen_immediate(const char *mnemonic, int opcode)
+int get_ea(const char *func_name, int opcode, int op_size, int read)
 {
-	char *tmp;
-	char func_name[100];
 	char wait_name[100];
 	char access_name[100];
-	int func_id;
-	int op_size;
-
-	op_size = (opcode >> 6) & 3;
-	if (!ea_alterable(opcode)
-	 || op_size == 3)
-	 //|| ea_mode(opcode) == 1)
-		return invalid();
-
-	sprintf(func_name, "%s_%04X", mnemonic, opcode);
-
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
-
-	WAIT_BUS("", "_read");
-
-	if (op_size == 2)
-		tmp = "<<16";
-	else
-		tmp = "";
-
-	printf("\tOP = READ_16(PC)%s;\n", tmp);
-	printf("\tPC += 2;\n");
-
-	if (op_size == 2)
-	{
-		WAIT_BUS("_wait_2", "_read_2");
-
-		printf("\tOP |= READ_16(PC);\n");
-		printf("\tPC += 2;\n");
-	}
 
 	switch(ea_mode(opcode))
 	{
@@ -177,11 +143,14 @@ int gen_immediate(const char *mnemonic, int opcode)
 			break;
 
 		case 4: // -(An)
-			sprintf(wait_name, "%s_wait_pre", func_name);
-			printf("\tTIMEOUT(2, %s);\n}\n\n", wait_name);
+			if (read) // timing fix
+			{
+				sprintf(wait_name, "%s_wait_pre", func_name);
+				printf("\tTIMEOUT(2, %s);\n}\n\n", wait_name);
 
-			declare_function(wait_name);
-			printf("M68K_FUNCTION(%s)\n{\n",wait_name);
+				declare_function(wait_name);
+				printf("M68K_FUNCTION(%s)\n{\n",wait_name);
+			}
 
 			printf("\tREG_A(%d) -= %d;\n", opcode&7, 1<<op_size);
 			printf("\tEA = REG_A(%d);\n", opcode&7);
@@ -274,24 +243,79 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 			break;
 	}
+	return 0;
+}
+
+int gen_immediate(const char *mnemonic, int opcode)
+{
+	char func_name[100];
+	char wait_name[100];
+	char access_name[100];
+	int func_id;
+	int op_size;
+
+	op_size = (opcode >> 6) & 3;
+	if (!ea_alterable(opcode)
+	 || op_size == 3)
+	 || ea_mode(opcode) == 1)
+		return invalid();
+
+	sprintf(func_name, "%s_%04X", mnemonic, opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	WAIT_BUS("", "_read");
+
+	switch(op_size)
+	{
+		case 0:
+			printf("\tOP = READ_8(PC);\n");
+			break;
+
+		case 1:
+			printf("\tOP = READ_16(PC);\n");
+			break;
+
+		case 2:
+			printf("\tOP = READ_16(PC)<<16;\n");
+			printf("\tPC += 2;\n");
+
+			WAIT_BUS("_wait_2", "_read_2");
+
+			printf("\tOP |= READ_16(PC);\n");
+			break;
+	}
+	printf("\tPC += 2;\n");
+
+	if (get_ea(func_name, opcode, op_size, 1) < 0)
+		return -1;
 
 	if (ea_address(opcode))
 	{
 		if (op_size)
-		{
-			printf(
-"	if (m68k->effective_address&1)\n"
-"		ADDRESS_EXCEPTION;\n");
-		}
+			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
+
 		WAIT_BUS("_wait_ea", "_read_ea");
 
-		printf("\tEV = READ_16(EA)%s;\n", tmp);
-
-		if (op_size == 2)
+		switch (op_size)
 		{
-			WAIT_BUS("_wait_ea2", "_read_ea2");
+			case 0:
+				printf("\tEV = READ_8(EA);\n");
+				break;
 
-			printf("\tEV |= READ_16(EA + 2);\n");
+			case 1:
+				printf("\tEV = READ_16(EA);\n");
+				break;
+
+			case 2:
+				printf("\tEV = READ_16(EA)<<16;\n");
+
+				WAIT_BUS("_wait_ea2", "_read_ea2");
+
+				printf("\tEV |= READ_16(EA + 2);\n");
+				break;
 		}
 	}
 
@@ -308,6 +332,98 @@ int gen_immediate(const char *mnemonic, int opcode)
 	else
 	{
 		printf("\t\tEV = result;\n\t}\n");
+
+		switch(op_size)
+		{
+			case 0: print_bus_wait("done_wait_wb", "done_write_wb"); break;
+			case 1: print_bus_wait("done_wait_ww", "done_write_ww"); break;
+			case 2: print_bus_wait("done_wait_wl", "done_write_wl"); break;
+		}
+	}
+	return func_id;
+}
+
+int gen_move(const char *mnemonic, int opcode)
+{
+	char func_name[100];
+	char wait_name[100];
+	char access_name[100];
+	int func_id;
+	int op_size;
+	int op_dest;
+	int sizes[4] = {3, 0, 2, 1};
+
+	op_size = (opcode >> 12) & 3;
+	op_size = sizes[op_size];
+
+	op_dest = ((opcode>>9)&7)|((opcode >> 3)&0x38);
+	if (!ea_alterable(op_dest)
+	 || op_size == 3
+	 || (ea_mode(opcode) == 1 && op_size == 0)
+	 || ea_mode(opcode) < 0)
+		return invalid();
+
+	sprintf(func_name, "%s_%04X", mnemonic, opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	if (get_ea(func_name, opcode, op_size, 1) < 0)
+		return -1;
+
+	if (ea_address(opcode))
+	{
+		if (op_size)
+			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
+
+		WAIT_BUS("_wait_ea", "_read_ea");
+
+		switch (op_size)
+		{
+			case 0:
+				printf("\tEV = READ_8(EA);\n");
+				break;
+
+			case 1:
+				printf("\tEV = READ_16(EA);\n");
+				break;
+
+			case 2:
+				printf("\tEV = READ_16(EA)<<16;\n");
+
+				WAIT_BUS("_wait_ea2", "_read_ea2");
+
+				printf("\tEV |= READ_16(EA + 2);\n");
+				break;
+		}
+	}
+
+	printf("\t{\n\t\tuint%d_t result = EV;\n", 8<<op_size);
+	if (ea_mode(op_dest) != 1)
+	{
+		printf("\t\tSET_N_FLAG(result>>%d);\n", (8<<op_size)-1);
+		printf("\t\tSET_Z_FLAG(result?0:1);\n");
+		printf("\t\tSET_V_FLAG(0);\n");
+		printf("\t\tSET_C_FLAG(0);\n");
+	}
+	if (ea_mode(op_dest) == 0)
+	{
+		printf("\t\tSET_DN_REG%d(%d, result);\n\t}\n", 8<<op_size, op_dest&0xF);
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	else if (ea_mode(op_dest) == 1)
+	{
+		printf("\t\tREG_D(%d) = (uint32_t)(int%d_t)result;\n\t}\n", op_dest&0xF, 8<<op_size);
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	else
+	{
+		char func_dest[100];
+		sprintf(func_dest, "%s_dest", func_name);
+		printf("\t\tEV = result;\n\t}\n");
+		if (get_ea(func_dest, op_dest, op_size, 0) < 0)
+			return -1;
 
 		switch(op_size)
 		{
@@ -349,6 +465,15 @@ int main(void)
 		valid[i] = gen_immediate("ori", i);
 		if (valid[i] < 0)
 			printf("Error at ori_%04X", i);
+	}
+	for (i=0; i<0x4000; ++i)
+	{
+		if (valid[i] == invalid())
+		{
+			valid[i] = gen_move("move", i);
+			if (valid[i] < 0)
+				printf("Error at move_%04X", i);
+		}
 	}
 
 	f = fopen("m68k_optable.h","wb");
