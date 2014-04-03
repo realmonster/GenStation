@@ -1,2 +1,4 @@
 *.obj
 *.exe
+core/m68k_optable.h
+core/m68k_optable.c

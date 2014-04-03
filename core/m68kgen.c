@@ -45,7 +45,7 @@ int ea_mode(int opcode)
 	}
 }
 
-int ea_alterable_array[] = {1,1,1,1,1,1,1,1,1,1,1,1};
+int ea_alterable_array[] = {1,1,1,1,1,1,1,1,1,0,0,0};
 
 int ea_alterable(int opcode)
 {
@@ -53,6 +53,12 @@ int ea_alterable(int opcode)
 	if (mode < 0)
 		return 0;
 	return ea_alterable_array[mode];
+}
+
+int ea_address(int opcode)
+{
+	int mode = ea_mode(opcode);
+	return (mode != 0) && (mode != 1) && (mode != 11);
 }
 
 char **func_names = 0;
@@ -112,14 +118,15 @@ int invalid(void)
 int gen_immediate(const char *mnemonic, int opcode)
 {
 	char *tmp;
-	char address[100];
 	char func_name[100];
 	char wait_name[100];
 	char access_name[100];
 	int func_id;
+	int op_size;
 
+	op_size = (opcode >> 6) & 3;
 	if (!ea_alterable(opcode)
-	 || (opcode & 0xC0) == 0xC0)
+	 || op_size == 3)
 	 //|| ea_mode(opcode) == 1)
 		return invalid();
 
@@ -131,7 +138,7 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 	WAIT_BUS("", "_read");
 
-	if ((opcode & 0xC0) == 0x80)
+	if (op_size == 2)
 		tmp = "<<16";
 	else
 		tmp = "";
@@ -139,7 +146,7 @@ int gen_immediate(const char *mnemonic, int opcode)
 	printf("\tm68k->operand = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])%s;\n", tmp);
 	printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
-	if ((opcode & 0xC0) == 0x80)
+	if (op_size == 2)
 	{
 		WAIT_BUS("_wait_2", "_read_2");
 
@@ -154,20 +161,19 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 		case 0: // Dn
 			printf("\tm68k->effective_value = m68k->reg[M68K_REG_D%d];\n", opcode&7);
-			address[0] = 0;
 			break;
 
 		case 1: // An
 			printf("\tm68k->effective_value = m68k->reg[M68K_REG_A%d];\n", opcode&7);
-			address[0] = 0;
 			break;
 
 		case 2: // (An)
-			sprintf(address, "m68k->reg[M68K_REG_A%d]", opcode&7);
+			printf("\tm68k->effective_address = m68k->reg[M68K_REG_A%d];\n", opcode&7);
 			break;
 
 		case 3: // (An)+
-			sprintf(address, "m68k->reg[M68K_REG_A%d]", opcode&7);
+			printf("\tm68k->effective_address = m68k->reg[M68K_REG_A%d];\n", opcode&7);
+			printf("\tm68k->reg[M68K_REG_A%d] += %d;\n", opcode&7, 1<<op_size);
 			break;
 
 		case 4: // -(An)
@@ -176,14 +182,9 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 			declare_function(wait_name);
 			printf("M68K_FUNCTION(%s)\n{\n",wait_name);
-			printf("\tm68k->reg[M68K_REG_A%d] -= ");
-			switch (opcode & 0xC0)
-			{
-				case 0x00: printf("1;\n"); break;
-				case 0x40: printf("2;\n"); break;
-				case 0x80: printf("4;\n"); break;
-			}
-			sprintf(address, "m68k->reg[M68K_REG_A%d]", opcode&7);
+
+			printf("\tm68k->reg[M68K_REG_A%d] -= %d;\n", opcode&7, 1<<op_size);
+			printf("\tm68k->effective_address = m68k->reg[M68K_REG_A%d];\n", opcode&7);
 			break;
 
 		case 5: // (d16,An)
@@ -197,7 +198,6 @@ int gen_immediate(const char *mnemonic, int opcode)
 				printf("\t                        + m68k->reg[M68K_REG_PC];\n");
 			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
-			sprintf(address, "m68k->effective_address");
 			break;
 
 		case 6: // (d8,An,xn)
@@ -225,7 +225,6 @@ int gen_immediate(const char *mnemonic, int opcode)
 	, ea_mode(opcode)==6?'A':'P', ea_mode(opcode)==6?'0'+(opcode&7):'C',
 	  ea_mode(opcode)==6?'A':'P', ea_mode(opcode)==6?'0'+(opcode&7):'C');
 
-			sprintf(address, "m68k->effective_address");
 			break;
 
 		case 7: // (xxx).W
@@ -234,7 +233,6 @@ int gen_immediate(const char *mnemonic, int opcode)
 			printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
 			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
-			sprintf(address, "m68k->effective_address");
 			break;
 
 		case 8: // (xxx).L
@@ -246,24 +244,24 @@ int gen_immediate(const char *mnemonic, int opcode)
 			WAIT_BUS("_wait_l2", "_read_l2");
 
 			printf("\tm68k->effective_address |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
-			sprintf(address, "m68k->effective_address");
 			break;
 
 		case 11: // #<data>
 			WAIT_BUS("_wait_imm", "_read_imm");
 
-			switch(opcode & 0xC0)
+			switch(op_size)
 			{
-				case 0x00:
+				case 0:
 					printf("\tm68k->effective_value = (int8_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
 					break;
 
-				case 0x40:
+				case 1:
 					printf("\tm68k->effective_value = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
 					break;
 
-				case 0x80:
+				case 2:
 					printf("\tm68k->effective_value = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n");
 					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
@@ -274,40 +272,50 @@ int gen_immediate(const char *mnemonic, int opcode)
 			}
 			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
-			address[0] = 0;
 			break;
 	}
 
-	if (address[0])
+	if (ea_address(opcode))
 	{
-		if (opcode & 0xC0)
+		if (op_size)
 		{
 			printf(
-"	if (%s&1)\n"
-"		ADDRESS_EXCEPTION;\n",address);
+"	if (m68k->effective_address&1)\n"
+"		ADDRESS_EXCEPTION;\n");
 		}
 		WAIT_BUS("_wait_ea", "_read_ea");
 
-		printf("\tm68k->effective_value = m68k->read_w(m68k, %s)%s;\n", address, tmp);
+		printf("\tm68k->effective_value = m68k->read_w(m68k, m68k->effective_address)%s;\n", tmp);
 
-		if ((opcode & 0xC0) == 0x80)
+		if (op_size == 2)
 		{
 			WAIT_BUS("_wait_ea2", "_read_ea2");
 
-			printf("\tm68k->operand |= (uint16_t)m68k->read_w(m68k, %s + 2);\n", address);
+			printf("\tm68k->effective_value |= (uint16_t)m68k->read_w(m68k, m68k->effective_address + 2);\n");
 		}
 	}
-	if ((opcode & 0x38) == 0x18)
+
+	printf("\t{\n\t\tuint%d_t result = m68k->effective_value | m68k->operand;\n", 8<<op_size);
+	printf("\t\tSET_N_FLAG(result>>%d);\n", (8<<op_size)-1);
+	printf("\t\tSET_Z_FLAG(result?0:1);\n");
+	printf("\t\tSET_V_FLAG(0);\n");
+	printf("\t\tSET_C_FLAG(0);\n");
+	if (ea_mode(opcode) < 2)
 	{
-		printf("\t%s += ", address);
-		switch(opcode & 0xC0)
+		printf("\t\tm68k->reg[M68K_REG_%c%d] = (m68k->reg[M68K_REG_%c%d]&(~((1<<%d)-1)))|(uint32_t)result;\n\t}\n", (ea_mode(opcode)?'A':'D'), opcode&7, (ea_mode(opcode)?'A':'D'), opcode&7, (8<<op_size)-1);
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	else
+	{
+		printf("\t\tm68k->effective_value = result;\n\t}\n");
+
+		switch(op_size)
 		{
-			case 0x00: printf("1;\n"); break;
-			case 0x40: printf("2;\n"); break;
-			case 0x80: printf("4;\n"); break;
+			case 0: print_bus_wait("done_wait_wb", "done_write_wb"); break;
+			case 1: print_bus_wait("done_wait_ww", "done_write_ww"); break;
+			case 2: print_bus_wait("done_wait_wl", "done_write_wl"); break;
 		}
 	}
-	printf("\tFETCH_OPCODE;\n}\n\n");
 	return func_id;
 }
 
@@ -319,12 +327,23 @@ int main(void)
 	FILE *f;
 
 	declare_function("invalid");
+	declare_function("done_wait_wb");
+	declare_function("done_wait_ww");
+	declare_function("done_wait_wl");
+	declare_function("done_wait_wl2");
+	declare_function("done_write_wb");
+	declare_function("done_write_ww");
+	declare_function("done_write_wl");
+	declare_function("done_write_wl2");
+
+	declare_function("opcode_wait");
+	declare_function("opcode_read");
 
 	for (i=0; i<0x10000; ++i)
 		valid[i] = invalid();
 
-	printf("#include \"ori.h\"\n");
-	printf("#include \"ori_f.h\"\n\n");
+	printf("#include \"m68k_opcode.h\"\n");
+	printf("#include \"m68k_optable.h\"\n\n");
 	for (i=0; i<0x100; ++i)
 	{
 		valid[i] = gen_immediate("ori", i);
@@ -332,18 +351,19 @@ int main(void)
 			printf("Error at ori_%04X", i);
 	}
 
-	f = fopen("ori_f.h","wb");
+	f = fopen("m68k_optable.h","wb");
 	for (i=0; i<func_count; ++i)
 		fprintf(f, "M68K_FUNCTION(%s);\n", func_names[i]);
+	fprintf(f, "\nextern m68k_function m68k_opcode_table[0x10000];\n");
 	fclose(f);
-	
-	//f = fopen("ori_ops.h","wb");
-	printf("#include \"core/m68k.h\"\nm68k_function m68k_opcode_table[0x10000] = {\n");
+
+	f = fopen("m68k_optable.c","wb");
+	fprintf(f, "#include \"m68k_opcode.h\"\n\nm68k_function m68k_opcode_table[0x10000] = {\n");
 	for (i=0; i<0x10000; ++i)
 	{
 		int id = valid[i];
-		printf("%s,\n", func_names[id]);
+		fprintf(f, "%s,\n", func_names[id]);
 	}
-	printf("};\n");
+	fprintf(f, "};\n");
 	fclose(f);
 }

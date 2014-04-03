@@ -81,7 +81,7 @@
 
 typedef struct m68k_context_ m68k_context;
 
-#define M68K_FUNCTION(name) static void name(m68k_context* m68k)
+#define M68K_FUNCTION(name) extern void name(m68k_context* m68k)
 typedef void (*m68k_function)(m68k_context* m68k);
 typedef uint32_t (*m68k_read_handler)(m68k_context* m68k, uint32_t address);
 typedef void (*m68k_write_handler)(m68k_context* m68k, uint32_t address, uint32_t value);
