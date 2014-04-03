@@ -92,7 +92,7 @@ struct m68k_context_
 	uint32_t timeout;
 	m68k_function next_func,fetch_ret,effective_ret;
 	m68k_read_handler read_w;
-	m68k_write_handler write_w;
+	m68k_write_handler write_b, write_w;
 
 	// current operation data
 	uint32_t opcode;

@@ -26,10 +26,10 @@ M68K_FUNCTION(invalid)
 
 M68K_FUNCTION(opcode_read)
 {
-	m68k->opcode = m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);
+	uint16_t opcode = READ_16(PC);
 	//printf("%04X\n",m68k->opcode);
-	m68k->reg[M68K_REG_PC] += 2;
-	m68k_opcode_table[m68k->opcode](m68k);
+	PC += 2;
+	m68k_opcode_table[opcode](m68k);
 }
 
 M68K_FUNCTION(opcode_wait)
@@ -41,7 +41,7 @@ M68K_FUNCTION(done_wait_wb) { WAIT_BUS(done_wait_wb, done_write_wb); }
 
 M68K_FUNCTION(done_write_wb)
 {
-	m68k->write_w(m68k, m68k->effective_address, m68k->effective_value);
+	WRITE_8(EA, EV);
 	FETCH_OPCODE;
 }
 
@@ -49,7 +49,7 @@ M68K_FUNCTION(done_wait_ww) { WAIT_BUS(done_wait_ww, done_write_ww); }
 
 M68K_FUNCTION(done_write_ww)
 {
-	m68k->write_w(m68k, m68k->effective_address, m68k->effective_value);
+	WRITE_16(EA, EV);
 	FETCH_OPCODE;
 }
 
@@ -57,7 +57,7 @@ M68K_FUNCTION(done_wait_wl) { WAIT_BUS(done_wait_wl, done_write_wl); }
 
 M68K_FUNCTION(done_write_wl)
 {
-	m68k->write_w(m68k, m68k->effective_address, m68k->effective_value>>16);
+	WRITE_16(EA, EV>>16);
 	WAIT_BUS(done_wait_wl2, done_write_wl2);
 }
 
@@ -65,7 +65,7 @@ M68K_FUNCTION(done_wait_wl2) { WAIT_BUS(done_wait_wl2, done_write_wl2); }
 
 M68K_FUNCTION(done_write_wl2)
 {
-	m68k->write_w(m68k, m68k->effective_address+2, m68k->effective_value);
+	WRITE_16(EA + 2, EV);
 	FETCH_OPCODE;
 }
 

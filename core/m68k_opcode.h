@@ -28,12 +28,38 @@
 #define BUS_WAIT_TIME 1
 #define READ_WAIT_TIME 4
 
+#define PC (m68k->reg[M68K_REG_PC])
+#define EA (m68k->effective_address)
+#define EV (m68k->effective_value)
+#define OP (m68k->operand)
+
+#define REG_D(n) (m68k->reg[M68K_REG_D0+(n)])
+#define REG_A(n) (m68k->reg[M68K_REG_A0+(n)])
+
+#define READ_16(address) ((uint16_t)(m68k->read_w(m68k, (address))))
+#define READ_8(address) ((uint8_t)(READ_16(address>>1)>>((address)&1?0:8)))
+
+#define WRITE_16(address, value) m68k->write_w(m68k, (address), (value))
+#define WRITE_8(address, value) m68k->write_b(m68k, (address), (value))
+
 #define SET_FLAG(bit,val) m68k->reg[M68K_REG_SR] = (m68k->reg[M68K_REG_SR]&(~(1<<(bit))))|((val)<<(bit))
 #define SET_X_FLAG(val) SET_FLAG(M68K_FLAG_X_BIT,val)
 #define SET_N_FLAG(val) SET_FLAG(M68K_FLAG_N_BIT,val)
 #define SET_Z_FLAG(val) SET_FLAG(M68K_FLAG_Z_BIT,val)
 #define SET_V_FLAG(val) SET_FLAG(M68K_FLAG_V_BIT,val)
 #define SET_C_FLAG(val) SET_FLAG(M68K_FLAG_C_BIT,val)
+
+#define SET_VAR8(var, val) (var) = ((var)&(~0xFF))|(val)
+#define SET_VAR16(var, val) (var) = ((var)&(~0xFFFF))|(val)
+#define SET_VAR32(var, val) (var) = val
+
+#define SET_DN_REG8(n, val)  SET_VAR8 (REG_D(n), (val))
+#define SET_DN_REG16(n, val) SET_VAR16(REG_D(n), (val))
+#define SET_DN_REG32(n, val) SET_VAR32(REG_D(n), (val))
+
+#define SET_AN_REG8(n, val)  SET_VAR8 (REG_A(n), (val))
+#define SET_AN_REG16(n, val) SET_VAR16(REG_A(n), (val))
+#define SET_AN_REG32(n, val) SET_VAR32(REG_A(n), (val))
 
 #define WAIT_BUS(bus_wait,bus_access) \
 if (BUS_BUSY) \

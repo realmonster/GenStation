@@ -143,15 +143,15 @@ int gen_immediate(const char *mnemonic, int opcode)
 	else
 		tmp = "";
 
-	printf("\tm68k->operand = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])%s;\n", tmp);
-	printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+	printf("\tOP = READ_16(PC)%s;\n", tmp);
+	printf("\tPC += 2;\n");
 
 	if (op_size == 2)
 	{
 		WAIT_BUS("_wait_2", "_read_2");
 
-		printf("\tm68k->operand |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-		printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+		printf("\tOP |= READ_16(PC);\n");
+		printf("\tPC += 2;\n");
 	}
 
 	switch(ea_mode(opcode))
@@ -160,20 +160,20 @@ int gen_immediate(const char *mnemonic, int opcode)
 			return -1;
 
 		case 0: // Dn
-			printf("\tm68k->effective_value = m68k->reg[M68K_REG_D%d];\n", opcode&7);
+			printf("\tEV = REG_D(%d);\n", opcode&7);
 			break;
 
 		case 1: // An
-			printf("\tm68k->effective_value = m68k->reg[M68K_REG_A%d];\n", opcode&7);
+			printf("\tEV = REG_A(%d);\n", opcode&7);
 			break;
 
 		case 2: // (An)
-			printf("\tm68k->effective_address = m68k->reg[M68K_REG_A%d];\n", opcode&7);
+			printf("\tEA = REG_A(%d);\n", opcode&7);
 			break;
 
 		case 3: // (An)+
-			printf("\tm68k->effective_address = m68k->reg[M68K_REG_A%d];\n", opcode&7);
-			printf("\tm68k->reg[M68K_REG_A%d] += %d;\n", opcode&7, 1<<op_size);
+			printf("\tEA = REG_A(%d);\n", opcode&7);
+			printf("\tREG_A(%d) += %d;\n", opcode&7, 1<<op_size);
 			break;
 
 		case 4: // -(An)
@@ -183,28 +183,28 @@ int gen_immediate(const char *mnemonic, int opcode)
 			declare_function(wait_name);
 			printf("M68K_FUNCTION(%s)\n{\n",wait_name);
 
-			printf("\tm68k->reg[M68K_REG_A%d] -= %d;\n", opcode&7, 1<<op_size);
-			printf("\tm68k->effective_address = m68k->reg[M68K_REG_A%d];\n", opcode&7);
+			printf("\tREG_A(%d) -= %d;\n", opcode&7, 1<<op_size);
+			printf("\tEA = REG_A(%d);\n", opcode&7);
 			break;
 
 		case 5: // (d16,An)
 		case 9: // (d16,pc)
 			WAIT_BUS("_wait_d16", "_read_d16");
 
-			printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC])\n");
+			printf("\tEA = (int16_t)READ_16(PC) + ");
 			if (ea_mode(opcode) == 5)
-				printf("\t                        + m68k->reg[M68K_REG_A%d];\n", opcode&7);
+				printf("REG_A(%d);\n", opcode&7);
 			else
-				printf("\t                        + m68k->reg[M68K_REG_PC];\n");
-			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+				printf("PC;\n");
 
+			printf("\tPC += 2;\n");
 			break;
 
 		case 6: // (d8,An,xn)
 		case 10: // (d8,pc,xn)
 			WAIT_BUS("_wait_d8", "_read_d8");
 
-			printf("\tm68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+			printf("\tEA = READ_16(PC);\n");
 
 			sprintf(wait_name, "%s_wait_d8_sum", func_name);
 			declare_function(wait_name);
@@ -213,15 +213,15 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 			printf("M68K_FUNCTION(%s)\n{\n", wait_name);
 			printf(
-"	if (m68k->effective_address & 0x800)\n"
-"		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
+"	if (EA & 0x800)\n"
+"		EA = (uint32_t)(int8_t)EA\n"
 "							+m68k->reg[M68K_REG_%c%c]\n"
-"							+m68k->reg[M68K_REG_D0+(m68k->effective_address>>12)&0xF];\n"
+"							+REG_D((EA>>12)&0xF);\n"
 "	else\n"
-"		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
+"		m68k->effective_address = (uint32_t)(int8_t)EA\n"
 "							+m68k->reg[M68K_REG_%c%c]\n"
-"							+(int16_t)m68k->reg[M68K_REG_D0+(m68k->effective_address>>12)&0xF];\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n"
+"							+(int16_t)REG_D((EA>>12)&0xF);\n"
+"	PC += 2;\n"
 	, ea_mode(opcode)==6?'A':'P', ea_mode(opcode)==6?'0'+(opcode&7):'C',
 	  ea_mode(opcode)==6?'A':'P', ea_mode(opcode)==6?'0'+(opcode&7):'C');
 
@@ -230,21 +230,21 @@ int gen_immediate(const char *mnemonic, int opcode)
 		case 7: // (xxx).W
 			WAIT_BUS("_wait_w", "_read_w");
 
-			printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+			printf("\tEA = (int16_t)READ_16(PC);\n");
+			printf("\tPC += 2;\n");
 
 			break;
 
 		case 8: // (xxx).L
 			WAIT_BUS("_wait_l", "_read_l");
 
-			printf("\tm68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n");
-			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+			printf("\tEA = READ_16(PC)<<16;\n");
+			printf("\tPC += 2;\n");
 
 			WAIT_BUS("_wait_l2", "_read_l2");
 
-			printf("\tm68k->effective_address |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+			printf("\tEA |= (uint16_t)READ_16(PC);\n");
+			printf("\tPC += 2;\n");
 
 			break;
 
@@ -254,23 +254,23 @@ int gen_immediate(const char *mnemonic, int opcode)
 			switch(op_size)
 			{
 				case 0:
-					printf("\tm68k->effective_value = (int8_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+					printf("\tEV = (int8_t)READ_16(PC);\n");
 					break;
 
 				case 1:
-					printf("\tm68k->effective_value = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+					printf("\tEV = (int16_t)READ_16(PC);\n");
 					break;
 
 				case 2:
-					printf("\tm68k->effective_value = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n");
-					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+					printf("\tEV = READ_16(PC)<<16;\n");
+					printf("\tPC += 2;\n");
 
 					WAIT_BUS("_wait_imm2", "_read_imm2");
 
-					printf("\tm68k->effective_value |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+					printf("\tEV |= READ_16(PC);\n");
 					break;
 			}
-			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+			printf("\tPC += 2;\n");
 
 			break;
 	}
@@ -285,29 +285,29 @@ int gen_immediate(const char *mnemonic, int opcode)
 		}
 		WAIT_BUS("_wait_ea", "_read_ea");
 
-		printf("\tm68k->effective_value = m68k->read_w(m68k, m68k->effective_address)%s;\n", tmp);
+		printf("\tEV = READ_16(EA)%s;\n", tmp);
 
 		if (op_size == 2)
 		{
 			WAIT_BUS("_wait_ea2", "_read_ea2");
 
-			printf("\tm68k->effective_value |= (uint16_t)m68k->read_w(m68k, m68k->effective_address + 2);\n");
+			printf("\tEV |= READ_16(EA + 2);\n");
 		}
 	}
 
-	printf("\t{\n\t\tuint%d_t result = m68k->effective_value | m68k->operand;\n", 8<<op_size);
+	printf("\t{\n\t\tuint%d_t result = EV | OP;\n", 8<<op_size);
 	printf("\t\tSET_N_FLAG(result>>%d);\n", (8<<op_size)-1);
 	printf("\t\tSET_Z_FLAG(result?0:1);\n");
 	printf("\t\tSET_V_FLAG(0);\n");
 	printf("\t\tSET_C_FLAG(0);\n");
 	if (ea_mode(opcode) < 2)
 	{
-		printf("\t\tm68k->reg[M68K_REG_%c%d] = (m68k->reg[M68K_REG_%c%d]&(~((1<<%d)-1)))|(uint32_t)result;\n\t}\n", (ea_mode(opcode)?'A':'D'), opcode&7, (ea_mode(opcode)?'A':'D'), opcode&7, (8<<op_size)-1);
+		printf("\t\tSET_DN_REG%d(%d, result);\n\t}\n", 8<<op_size, opcode&0xF);
 		printf("\tFETCH_OPCODE;\n}\n\n");
 	}
 	else
 	{
-		printf("\t\tm68k->effective_value = result;\n\t}\n");
+		printf("\t\tEV = result;\n\t}\n");
 
 		switch(op_size)
 		{
