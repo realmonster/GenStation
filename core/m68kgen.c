@@ -98,7 +98,13 @@ void print_bus_wait(const char* bus_wait, const char* bus_access)
 		printf("M68K_FUNCTION(%s)\n{\n", bus_access);
 }
 
-int invalid()
+#define WAIT_BUS(bus_wait_str, bus_access_str) if (1) {\
+sprintf(wait_name, "%s" bus_wait_str, func_name); \
+sprintf(access_name, "%s" bus_access_str, func_name); \
+print_bus_wait(wait_name, access_name);\
+} else (void*)0
+
+int invalid(void)
 {
 	return func_by_name("invalid");
 }
@@ -123,8 +129,7 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 	printf("M68K_FUNCTION(%s)\n{\n", func_name);
 
-	sprintf(access_name, "%s_read", func_name);
-	print_bus_wait(func_name, access_name);
+	WAIT_BUS("", "_read");
 
 	if ((opcode & 0xC0) == 0x80)
 		tmp = "<<16";
@@ -136,35 +141,36 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 	if ((opcode & 0xC0) == 0x80)
 	{
-		sprintf(wait_name, "%s_wait_2", func_name);
-		sprintf(access_name, "%s_read_2", func_name);
-		print_bus_wait(wait_name, access_name);
+		WAIT_BUS("_wait_2", "_read_2");
 
 		printf("\tm68k->operand |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
 		printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 	}
 
-	switch(opcode & 0x38)
+	switch(ea_mode(opcode))
 	{
-		case 0x00: // Dn
+		default:
+			return -1;
+
+		case 0: // Dn
 			printf("\tm68k->effective_value = m68k->reg[M68K_REG_D%d];\n", opcode&7);
 			address[0] = 0;
 			break;
 
-		case 0x08: // An
+		case 1: // An
 			printf("\tm68k->effective_value = m68k->reg[M68K_REG_A%d];\n", opcode&7);
 			address[0] = 0;
 			break;
 
-		case 0x10: // (An)
+		case 2: // (An)
 			sprintf(address, "m68k->reg[M68K_REG_A%d]", opcode&7);
 			break;
 
-		case 0x18: // (An)+
+		case 3: // (An)+
 			sprintf(address, "m68k->reg[M68K_REG_A%d]", opcode&7);
 			break;
 
-		case 0x20: // -(An)
+		case 4: // -(An)
 			sprintf(wait_name, "%s_wait_pre", func_name);
 			printf("\tTIMEOUT(2, %s);\n}\n\n", wait_name);
 
@@ -180,21 +186,23 @@ int gen_immediate(const char *mnemonic, int opcode)
 			sprintf(address, "m68k->reg[M68K_REG_A%d]", opcode&7);
 			break;
 
-		case 0x28: // (d16,An)
-			sprintf(wait_name, "%s_wait_d16", func_name);
-			sprintf(access_name, "%s_read_d16", func_name);
-			print_bus_wait(wait_name, access_name);
+		case 5: // (d16,An)
+		case 9: // (d16,pc)
+			WAIT_BUS("_wait_d16", "_read_d16");
 
-			printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+			printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC])\n");
+			if (ea_mode(opcode) == 5)
+				printf("\t                        + m68k->reg[M68K_REG_A%d];\n", opcode&7);
+			else
+				printf("\t                        + m68k->reg[M68K_REG_PC];\n");
 			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
 			sprintf(address, "m68k->effective_address");
 			break;
 
-		case 0x30: // (d8,An,xn)
-			sprintf(wait_name, "%s_wait_d8", func_name);
-			sprintf(access_name, "%s_read_d8", func_name);
-			print_bus_wait(wait_name, access_name);
+		case 6: // (d8,An,xn)
+		case 10: // (d8,pc,xn)
+			WAIT_BUS("_wait_d8", "_read_d8");
 
 			printf("\tm68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
 
@@ -207,146 +215,84 @@ int gen_immediate(const char *mnemonic, int opcode)
 			printf(
 "	if (m68k->effective_address & 0x800)\n"
 "		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
-"							+m68k->reg[M68K_REG_A%d]\n"
+"							+m68k->reg[M68K_REG_%c%c]\n"
 "							+m68k->reg[M68K_REG_D0+(m68k->effective_address>>12)&0xF];\n"
 "	else\n"
 "		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
-"							+m68k->reg[M68K_REG_A%d]\n"
+"							+m68k->reg[M68K_REG_%c%c]\n"
 "							+(int16_t)m68k->reg[M68K_REG_D0+(m68k->effective_address>>12)&0xF];\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n", opcode&7, opcode&7);
+"	m68k->reg[M68K_REG_PC] += 2;\n"
+	, ea_mode(opcode)==6?'A':'P', ea_mode(opcode)==6?'0'+(opcode&7):'C',
+	  ea_mode(opcode)==6?'A':'P', ea_mode(opcode)==6?'0'+(opcode&7):'C');
 
 			sprintf(address, "m68k->effective_address");
 			break;
 
-		case 0x38:
-			switch (opcode & 7)
-			{
-				case 0: // (xxx).W
-					sprintf(wait_name, "%s_wait_w", func_name);
-					sprintf(access_name, "%s_read_w", func_name);
-					print_bus_wait(wait_name, access_name);
+		case 7: // (xxx).W
+			WAIT_BUS("_wait_w", "_read_w");
 
-					printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+			printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
-					sprintf(address, "m68k->effective_address");
-					break;
-
-				case 1: // (xxx).L
-					sprintf(wait_name, "%s_wait_l", func_name);
-					sprintf(access_name, "%s_read_l", func_name);
-					print_bus_wait(wait_name, access_name);
-
-					printf("\tm68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n");
-					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
-
-					sprintf(wait_name, "%s_wait_l_2", func_name);
-					sprintf(access_name, "%s_read_l_2", func_name);
-					print_bus_wait(wait_name, access_name);
-
-					printf("\tm68k->effective_address |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-
-					sprintf(address, "m68k->effective_address");
-					break;
-
-				case 2: // (d16,pc)
-					sprintf(wait_name, "%s_wait_d16", func_name);
-					sprintf(access_name, "%s_read_d16", func_name);
-					print_bus_wait(wait_name, access_name);
-
-					printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
-
-					sprintf(address, "m68k->effective_address");
-					break;
-
-				case 3: // (d8,pc,xn)
-					sprintf(wait_name, "%s_wait_d8", func_name);
-					sprintf(access_name, "%s_read_d8", func_name);
-					print_bus_wait(wait_name, access_name);
-
-					printf("\tm68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-
-					sprintf(wait_name, "%s_wait_d8_sum", func_name);
-					declare_function(wait_name);
-
-					printf("\tTIMEOUT(2, %s);\n}\n\n", wait_name);
-
-					printf("M68K_FUNCTION(%s)\n{\n", wait_name);
-
-					printf(
-"	if (m68k->effective_address & 0x800)\n"
-"		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
-"							+m68k->reg[M68K_REG_PC]\n"
-"							+m68k->reg[M68K_REG_D0+(m68k->effective_address>>12)&0xF];\n"
-"	else\n"
-"		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
-"							+m68k->reg[M68K_REG_PC]\n"
-"							+(int16_t)m68k->reg[M68K_REG_D0+(m68k->effective_address>>12)&0xF];\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n");
-
-					sprintf(address, "m68k->effective_address");
-					break;
-
-				case 4: // #<data>
-					sprintf(wait_name, "%s_wait_imm", func_name);
-					sprintf(access_name, "%s_read_imm", func_name);
-					print_bus_wait(wait_name, access_name);
-
-					switch(opcode & 0xC0)
-					{
-						case 0x00:
-							printf("\tm68k->effective_value = (int8_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-							break;
-
-						case 0x40:
-							printf("\tm68k->effective_value = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-							break;
-
-						case 0x80:
-							printf("\tm68k->effective_value = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n");
-							printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
-
-							sprintf(wait_name, "%s_wait_imm_2", func_name);
-							sprintf(access_name, "%s_read_imm_2", func_name);
-							print_bus_wait(wait_name, access_name);
-
-							printf("\tm68k->effective_value |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
-							break;
-					}
-					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
-
-					address[0] = 0;
-					break;
-
-				default:
-					return -1;
-			}
+			sprintf(address, "m68k->effective_address");
 			break;
 
-		default:
-			return -1;
+		case 8: // (xxx).L
+			WAIT_BUS("_wait_l", "_read_l");
+
+			printf("\tm68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n");
+			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+
+			WAIT_BUS("_wait_l2", "_read_l2");
+
+			printf("\tm68k->effective_address |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+
+			sprintf(address, "m68k->effective_address");
+			break;
+
+		case 11: // #<data>
+			WAIT_BUS("_wait_imm", "_read_imm");
+
+			switch(opcode & 0xC0)
+			{
+				case 0x00:
+					printf("\tm68k->effective_value = (int8_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+					break;
+
+				case 0x40:
+					printf("\tm68k->effective_value = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+					break;
+
+				case 0x80:
+					printf("\tm68k->effective_value = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n");
+					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+
+					WAIT_BUS("_wait_imm2", "_read_imm2");
+
+					printf("\tm68k->effective_value |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+					break;
+			}
+			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
+
+			address[0] = 0;
+			break;
 	}
 
 	if (address[0])
 	{
-		if ((opcode & 0xC0) != 0x40)
+		if (opcode & 0xC0)
 		{
 			printf(
 "	if (%s&1)\n"
 "		ADDRESS_EXCEPTION;\n",address);
 		}
-		sprintf(wait_name, "%s_wait_ea", func_name);
-		sprintf(access_name, "%s_read_ea", func_name);
-		print_bus_wait(wait_name, access_name);
+		WAIT_BUS("_wait_ea", "_read_ea");
 
 		printf("\tm68k->effective_value = m68k->read_w(m68k, %s)%s;\n", address, tmp);
 
 		if ((opcode & 0xC0) == 0x80)
 		{
-			sprintf(wait_name, "%s_wait_4", func_name);
-			sprintf(access_name, "%s_read_4", func_name);
-			print_bus_wait(wait_name, access_name);
+			WAIT_BUS("_wait_ea2", "_read_ea2");
 
 			printf("\tm68k->operand |= (uint16_t)m68k->read_w(m68k, %s + 2);\n", address);
 		}
@@ -367,9 +313,9 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 int valid[0x10000];
 
-int main()
+int main(void)
 {
-	int i,r;
+	int i;
 	FILE *f;
 
 	declare_function("invalid");
