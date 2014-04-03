@@ -20,13 +20,6 @@
 
 #define GENERATE_FAILED -1
 
-FILE *f;
-
-int invalid()
-{
-	return 0;
-}
-
 int ea_mode(int opcode)
 {
 	switch (opcode & 0x38)
@@ -62,63 +55,93 @@ int ea_alterable(int opcode)
 	return ea_alterable_array[mode];
 }
 
-int ori(int opcode)
+char **func_names = 0;
+int func_count = 0;
+
+int func_by_name(const char* name)
+{
+	int i;
+	for (i=0; i<func_count; ++i)
+		if (!strcmp(name, func_names[i]))
+			return i;
+	return -1;
+}
+
+int declare_function(const char* name)
+{
+	if (func_by_name(name) >= 0)
+		return -1;
+
+	++func_count;
+	func_names = (char**)realloc(func_names, func_count * sizeof(char*));
+	if (!func_names)
+		return -1;
+
+	func_names[func_count - 1] = (char*)malloc(strlen(name) + 1);
+	if (!func_names[func_count - 1])
+		return -1;
+
+	strcpy(func_names[func_count - 1], name);
+	return func_count - 1;
+}
+
+void print_bus_wait(const char* bus_wait, const char* bus_access)
+{
+	int bw, ba;
+
+	bw = declare_function(bus_wait);
+	ba = declare_function(bus_access);
+	printf("\tWAIT_BUS(%s, %s);\n}\n\n", bus_wait, bus_access);
+	if (bw >= 0)
+		printf("M68K_FUNCTION(%s) { WAIT_BUS(%s, %s); }\n\n", bus_wait, bus_wait, bus_access);
+	if (ba >= 0)
+		printf("M68K_FUNCTION(%s)\n{\n", bus_access);
+}
+
+int invalid()
+{
+	return func_by_name("invalid");
+}
+
+int gen_immediate(const char *mnemonic, int opcode)
 {
 	char *tmp;
 	char address[100];
+	char func_name[100];
+	char wait_name[100];
+	char access_name[100];
+	int func_id;
 
 	if (!ea_alterable(opcode)
 	 || (opcode & 0xC0) == 0xC0)
 	 //|| ea_mode(opcode) == 1)
 		return invalid();
-	printf(
-"M68K_FUNCTION(ori_%04X)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read);\n"
-"}\n\n", opcode, opcode, opcode);
 
-	fprintf(f, "M68K_FUNCTION(ori_%04X_read);\n", opcode);
+	sprintf(func_name, "%s_%04X", mnemonic, opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	sprintf(access_name, "%s_read", func_name);
+	print_bus_wait(func_name, access_name);
 
 	if ((opcode & 0xC0) == 0x80)
 		tmp = "<<16";
 	else
 		tmp = "";
 
-	printf(
-"M68K_FUNCTION(ori_%04X_read)\n"
-"{\n"
-"	m68k->operand = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])%s;\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n", opcode, tmp);
+	printf("\tm68k->operand = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])%s;\n", tmp);
+	printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
 	if ((opcode & 0xC0) == 0x80)
 	{
-		printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_2);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_2);\n"
-"}\n\n", opcode, opcode);
+		sprintf(wait_name, "%s_wait_2", func_name);
+		sprintf(access_name, "%s_read_2", func_name);
+		print_bus_wait(wait_name, access_name);
 
-		fprintf(f, "M68K_FUNCTION(ori_%04X_wait_2);\n", opcode);
-		fprintf(f, "M68K_FUNCTION(ori_%04X_read_2);\n", opcode);
-
-		printf(
-"M68K_FUNCTION(ori_%04X_wait_2)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_2);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_2);\n"
-"}\n\n", opcode, opcode, opcode);
-
-		printf(
-"M68K_FUNCTION(ori_%04X_read_2)\n"
-"{\n"
-"	m68k->operand |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n", opcode, opcode, opcode);
+		printf("\tm68k->operand |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+		printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 	}
 
 	switch(opcode & 0x38)
@@ -142,14 +165,12 @@ int ori(int opcode)
 			break;
 
 		case 0x20: // -(An)
-			printf("\tTIMEOUT(2, ori_%04X_wait_pre);\n}\n\n", opcode);
+			sprintf(wait_name, "%s_wait_pre", func_name);
+			printf("\tTIMEOUT(2, %s);\n}\n\n", wait_name);
 
-			fprintf(f, "M68K_FUNCTION(ori_%04X_wait_pre);\n", opcode);
-
-			printf(
-"M68K_FUNCTION(ori_%04X_wait_pre)\n"
-"{\n"
-"	m68k->reg[M68K_REG_A%d] -= ", opcode, opcode&7);
+			declare_function(wait_name);
+			printf("M68K_FUNCTION(%s)\n{\n",wait_name);
+			printf("\tm68k->reg[M68K_REG_A%d] -= ");
 			switch (opcode & 0xC0)
 			{
 				case 0x00: printf("1;\n"); break;
@@ -160,63 +181,30 @@ int ori(int opcode)
 			break;
 
 		case 0x28: // (d16,An)
-			printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_d16);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_d16);\n"
-"}\n\n", opcode, opcode);
-			fprintf(f, "M68K_FUNCTION(ori_%04X_wait_d16);\n", opcode);
-			fprintf(f, "M68K_FUNCTION(ori_%04X_read_d16);\n", opcode);
+			sprintf(wait_name, "%s_wait_d16", func_name);
+			sprintf(access_name, "%s_read_d16", func_name);
+			print_bus_wait(wait_name, access_name);
 
-			printf(
-"M68K_FUNCTION(ori_%04X_wait_d16)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_d16);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_d16);\n"
-"}\n\n", opcode, opcode, opcode);
-
-			printf(
-"M68K_FUNCTION(ori_%04X_read_d16)\n"
-"{\n"
-"	m68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n", opcode, opcode, opcode);
+			printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+			printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
 			sprintf(address, "m68k->effective_address");
 			break;
 
 		case 0x30: // (d8,An,xn)
-			printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_d8);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_d8);\n"
-"}\n\n", opcode, opcode);
-			fprintf(f, "M68K_FUNCTION(ori_%04X_wait_d8);\n", opcode);
-			fprintf(f, "M68K_FUNCTION(ori_%04X_read_d8);\n", opcode);
+			sprintf(wait_name, "%s_wait_d8", func_name);
+			sprintf(access_name, "%s_read_d8", func_name);
+			print_bus_wait(wait_name, access_name);
 
-			printf(
-"M68K_FUNCTION(ori_%04X_wait_d8)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_d8);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_d8);\n"
-"}\n\n", opcode, opcode, opcode);
+			printf("\tm68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
 
-			printf(
-"M68K_FUNCTION(ori_%04X_read_d8)\n"
-"{\n"
-"	m68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n"
-"	TIMEOUT(2, ori_%04X_wait_d8_sum);\n"
-"}\n\n", opcode, opcode);
+			sprintf(wait_name, "%s_wait_d8_sum", func_name);
+			declare_function(wait_name);
 
-			printf(
-"M68K_FUNCTION(ori_%04X_wait_d8_sum)\n"
-"{\n"
+			printf("\tTIMEOUT(2, %s);\n}\n\n", wait_name);
 
+			printf("M68K_FUNCTION(%s)\n{\n", wait_name);
+			printf(
 "	if (m68k->effective_address & 0x800)\n"
 "		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
 "							+m68k->reg[M68K_REG_A%d]\n"
@@ -225,9 +213,7 @@ int ori(int opcode)
 "		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
 "							+m68k->reg[M68K_REG_A%d]\n"
 "							+(int16_t)m68k->reg[M68K_REG_D0+(m68k->effective_address>>12)&0xF];\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n", opcode, opcode&7, opcode&7);
-
-			fprintf(f, "M68K_FUNCTION(ori_%04X_wait_d8_sum);\n", opcode);
+"	m68k->reg[M68K_REG_PC] += 2;\n", opcode&7, opcode&7);
 
 			sprintf(address, "m68k->effective_address");
 			break;
@@ -236,142 +222,59 @@ int ori(int opcode)
 			switch (opcode & 7)
 			{
 				case 0: // (xxx).W
-					printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_w);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_w);\n"
-"}\n\n", opcode, opcode);
+					sprintf(wait_name, "%s_wait_w", func_name);
+					sprintf(access_name, "%s_read_w", func_name);
+					print_bus_wait(wait_name, access_name);
 
-					printf(
-"M68K_FUNCTION(ori_%04X_wait_w)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_w);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_w);\n"
-"}\n\n", opcode, opcode, opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_wait_w);\n", opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_read_w);\n", opcode);
-
-					printf(
-"M68K_FUNCTION(ori_%04X_read_w)\n"
-"{\n"
-"	m68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n", opcode);
+					printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
 					sprintf(address, "m68k->effective_address");
 					break;
 
 				case 1: // (xxx).L
-					printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_l);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_l);\n"
-"}\n\n", opcode, opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_wait_l);\n", opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_read_l);\n", opcode);
+					sprintf(wait_name, "%s_wait_l", func_name);
+					sprintf(access_name, "%s_read_l", func_name);
+					print_bus_wait(wait_name, access_name);
 
-					printf(
-"M68K_FUNCTION(ori_%04X_wait_l)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_l);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_l);\n"
-"}\n\n", opcode, opcode, opcode);
+					printf("\tm68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n");
+					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
-					printf(
-"M68K_FUNCTION(ori_%04X_read_l)\n"
-"{\n"
-"	m68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_l_2);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_l_2);\n"
-"}\n\n", opcode, opcode, opcode);
+					sprintf(wait_name, "%s_wait_l_2", func_name);
+					sprintf(access_name, "%s_read_l_2", func_name);
+					print_bus_wait(wait_name, access_name);
 
-
-					printf(
-"M68K_FUNCTION(ori_%04X_wait_l_2)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_l_2);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_l_2);\n"
-"}\n\n", opcode, opcode, opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_wait_l_2);\n", opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_read_l_2);\n", opcode);
-
-					printf(
-"M68K_FUNCTION(ori_%04X_read_l_2)\n"
-"{\n"
-"	m68k->effective_address |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n"
-	, opcode);
+					printf("\tm68k->effective_address |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
 
 					sprintf(address, "m68k->effective_address");
 					break;
 
 				case 2: // (d16,pc)
-					printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_d16);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_d16);\n"
-"}\n\n", opcode, opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_wait_d16);\n", opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_read_d16);\n", opcode);
+					sprintf(wait_name, "%s_wait_d16", func_name);
+					sprintf(access_name, "%s_read_d16", func_name);
+					print_bus_wait(wait_name, access_name);
 
-					printf(
-"M68K_FUNCTION(ori_%04X_wait_d16)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_d16);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_d16);\n"
-"}\n\n", opcode, opcode, opcode);
-
-					printf(
-"M68K_FUNCTION(ori_%04X_read_d16)\n"
-"{\n"
-"	m68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n", opcode, opcode, opcode);
+					printf("\tm68k->effective_address = (int16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
 
 					sprintf(address, "m68k->effective_address");
 					break;
 
 				case 3: // (d8,pc,xn)
-					printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_d8);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_d8);\n"
-"}\n\n", opcode, opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_wait_d8);\n", opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_read_d8);\n", opcode);
+					sprintf(wait_name, "%s_wait_d8", func_name);
+					sprintf(access_name, "%s_read_d8", func_name);
+					print_bus_wait(wait_name, access_name);
+
+					printf("\tm68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
+
+					sprintf(wait_name, "%s_wait_d8_sum", func_name);
+					declare_function(wait_name);
+
+					printf("\tTIMEOUT(2, %s);\n}\n\n", wait_name);
+
+					printf("M68K_FUNCTION(%s)\n{\n", wait_name);
 
 					printf(
-"M68K_FUNCTION(ori_%04X_wait_d8)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_d8);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_d8);\n"
-"}\n\n", opcode, opcode, opcode);
-
-					printf(
-"M68K_FUNCTION(ori_%04X_read_d8)\n"
-"{\n"
-"	m68k->effective_address = m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n"
-"	TIMEOUT(2, ori_%04X_wait_d8_sum);\n"
-"}\n\n", opcode, opcode);
-
-					printf(
-"M68K_FUNCTION(ori_%04X_wait_d8_sum)\n"
-"{\n"
-
 "	if (m68k->effective_address & 0x800)\n"
 "		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
 "							+m68k->reg[M68K_REG_PC]\n"
@@ -380,34 +283,15 @@ int ori(int opcode)
 "		m68k->effective_address = (uint32_t)(int8_t)m68k->effective_address\n"
 "							+m68k->reg[M68K_REG_PC]\n"
 "							+(int16_t)m68k->reg[M68K_REG_D0+(m68k->effective_address>>12)&0xF];\n"
-"	m68k->reg[M68K_REG_PC] += 2;\n", opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_wait_d8_sum);\n", opcode);
+"	m68k->reg[M68K_REG_PC] += 2;\n");
 
 					sprintf(address, "m68k->effective_address");
 					break;
 
 				case 4: // #<data>
-					printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_imm);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_imm);\n"
-"}\n\n", opcode, opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_wait_imm);\n", opcode);
-					fprintf(f, "M68K_FUNCTION(ori_%04X_read_imm);\n", opcode);
-
-					printf(
-"M68K_FUNCTION(ori_%04X_wait_imm)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_imm);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_imm);\n"
-"}\n\n", opcode, opcode, opcode);
-
-					printf(
-"M68K_FUNCTION(ori_%04X_read_imm)\n"
-"{\n", opcode);
+					sprintf(wait_name, "%s_wait_imm", func_name);
+					sprintf(access_name, "%s_read_imm", func_name);
+					print_bus_wait(wait_name, access_name);
 
 					switch(opcode & 0xC0)
 					{
@@ -422,29 +306,12 @@ int ori(int opcode)
 						case 0x80:
 							printf("\tm68k->effective_value = m68k->read_w(m68k, m68k->reg[M68K_REG_PC])<<16;\n");
 							printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
-							printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_imm_2);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_imm_2);\n"
-"}\n\n", opcode, opcode);
-							fprintf(f, "M68K_FUNCTION(ori_%04X_wait_imm_2);\n", opcode);
-							fprintf(f, "M68K_FUNCTION(ori_%04X_read_imm_2);\n", opcode);
 
-							printf(
-"M68K_FUNCTION(ori_%04X_wait_imm_2)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_imm_2);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_imm_2);\n"
-"}\n\n", opcode, opcode, opcode);
+							sprintf(wait_name, "%s_wait_imm_2", func_name);
+							sprintf(access_name, "%s_read_imm_2", func_name);
+							print_bus_wait(wait_name, access_name);
 
-							printf(
-"M68K_FUNCTION(ori_%04X_read_imm_2)\n"
-"{\n"
-"	m68k->effective_value |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n"
-	, opcode);
+							printf("\tm68k->effective_value |= (uint16_t)m68k->read_w(m68k, m68k->reg[M68K_REG_PC]);\n");
 							break;
 					}
 					printf("\tm68k->reg[M68K_REG_PC] += 2;\n");
@@ -453,12 +320,12 @@ int ori(int opcode)
 					break;
 
 				default:
-					return 0;
+					return -1;
 			}
 			break;
 
 		default:
-			return 0;
+			return -1;
 	}
 
 	if (address[0])
@@ -469,55 +336,19 @@ int ori(int opcode)
 "	if (%s&1)\n"
 "		ADDRESS_EXCEPTION;\n",address);
 		}
-		printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_ea);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_ea);\n"
-"}\n\n", opcode, opcode);
-		fprintf(f, "M68K_FUNCTION(ori_%04X_wait_ea);\n", opcode);
-		fprintf(f, "M68K_FUNCTION(ori_%04X_read_ea);\n", opcode);
+		sprintf(wait_name, "%s_wait_ea", func_name);
+		sprintf(access_name, "%s_read_ea", func_name);
+		print_bus_wait(wait_name, access_name);
 
-		printf(
-"M68K_FUNCTION(ori_%04X_wait_ea)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_ea);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_ea);\n"
-"}\n\n", opcode, opcode, opcode);
-
-		printf(
-"M68K_FUNCTION(ori_%04X_read_ea)\n"
-"{\n"
-"	m68k->effective_value = m68k->read_w(m68k, %s)%s;\n"
-	, opcode, address, tmp);
+		printf("\tm68k->effective_value = m68k->read_w(m68k, %s)%s;\n", address, tmp);
 
 		if ((opcode & 0xC0) == 0x80)
 		{
-			printf(
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_4);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_4);\n"
-"}\n\n", opcode, opcode);
-			fprintf(f, "M68K_FUNCTION(ori_%04X_wait_4);\n", opcode);
-			fprintf(f, "M68K_FUNCTION(ori_%04X_read_4);\n", opcode);
+			sprintf(wait_name, "%s_wait_4", func_name);
+			sprintf(access_name, "%s_read_4", func_name);
+			print_bus_wait(wait_name, access_name);
 
-			printf(
-"M68K_FUNCTION(ori_%04X_wait_4)\n"
-"{\n"
-"	if (BUS_BUSY)\n"
-"		TIMEOUT(BUS_WAIT_TIME, ori_%04X_wait_4);\n"
-"	else\n"
-"		TIMEOUT(READ_WAIT_TIME, ori_%04X_read_4);\n"
-"}\n\n", opcode, opcode, opcode);
-
-			printf(
-"M68K_FUNCTION(ori_%04X_read_4)\n"
-"{\n"
-"	m68k->operand |= (uint16_t)m68k->read_w(m68k, %s + 2);\n"
-		, opcode, address);
+			printf("\tm68k->operand |= (uint16_t)m68k->read_w(m68k, %s + 2);\n", address);
 		}
 	}
 	if ((opcode & 0x38) == 0x18)
@@ -531,7 +362,7 @@ int ori(int opcode)
 		}
 	}
 	printf("\tFETCH_OPCODE;\n}\n\n");
-	return 1;
+	return func_id;
 }
 
 int valid[0x10000];
@@ -539,24 +370,34 @@ int valid[0x10000];
 int main()
 {
 	int i,r;
+	FILE *f;
 
-	memset(valid, 0, sizeof(valid));
-	f = fopen("ori_f.h","wb");
+	declare_function("invalid");
+
+	for (i=0; i<0x10000; ++i)
+		valid[i] = invalid();
+
 	printf("#include \"ori.h\"\n");
 	printf("#include \"ori_f.h\"\n\n");
 	for (i=0; i<0x100; ++i)
-		valid[i] = ori(i);
+	{
+		valid[i] = gen_immediate("ori", i);
+		if (valid[i] < 0)
+			printf("Error at ori_%04X", i);
+	}
+
+	f = fopen("ori_f.h","wb");
+	for (i=0; i<func_count; ++i)
+		fprintf(f, "M68K_FUNCTION(%s);\n", func_names[i]);
 	fclose(f);
 	
-	f = fopen("ori_ops.h","wb");
-	printf("#include \"code/m68k.h\"\nm68k_function m68k_opcode_table[0x10000] = {\n");
+	//f = fopen("ori_ops.h","wb");
+	printf("#include \"core/m68k.h\"\nm68k_function m68k_opcode_table[0x10000] = {\n");
 	for (i=0; i<0x10000; ++i)
 	{
-		if (valid[i])
-			printf("ori_%04X,\n",i);
-		else
-			printf("invalid,\n");
+		int id = valid[i];
+		printf("%s,\n", func_names[id]);
 	}
-	printf("}\n");
+	printf("};\n");
 	fclose(f);
 }
