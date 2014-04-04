@@ -378,10 +378,19 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 	if (ea_address(opcode))
 	{
+		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
-		READ_BUS("_ea", "EA", "EV", op_size);
+		sprintf(func_name, "%s_common", mnemonic);
+		sprintf(access_name, "%s_read", func_name);
+		id = func_by_name(access_name);
+		if (id >= 0)
+		{
+			WAIT_BUS("_wait", "_read");
+			return func_id;
+		}
+		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	printf("\t{\n\t\tuint%d_t result = EV | OP;\n", 8<<op_size);
@@ -439,10 +448,19 @@ int gen_move(const char *mnemonic, int opcode)
 
 	if (ea_address(opcode))
 	{
+		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
-		READ_BUS("_ea", "EA", "EV", op_size);
+		sprintf(func_name, "%s_common_%02X", mnemonic, (op_size<<6)|op_dest);
+		sprintf(access_name, "%s_read", func_name);
+		id = func_by_name(access_name);
+		if (id >= 0)
+		{
+			WAIT_BUS("_wait", "_read");
+			return func_id;
+		}
+		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	printf("\t{\n\t\tuint%d_t result = EV;\n", 8<<op_size);
@@ -465,10 +483,9 @@ int gen_move(const char *mnemonic, int opcode)
 	}
 	else
 	{
-		char func_dest[100];
-		sprintf(func_dest, "%s_dest", func_name);
+		sprintf(access_name, "%s_dest", func_name);
 		printf("\t\tEV = result;\n\t}\n");
-		if (get_ea(func_dest, op_dest, op_size, 0) < 0)
+		if (get_ea(access_name, op_dest, op_size, 0) < 0)
 			return -1;
 
 		switch(op_size)
@@ -509,10 +526,19 @@ int gen_move_from_sr(const char *mnemonic, int opcode)
 
 	if (ea_address(opcode))
 	{
+		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
-		READ_BUS("_ea", "EA", "EV", op_size);
+		sprintf(func_name, "%s_fsr_common", mnemonic);
+		sprintf(access_name, "%s_read", func_name);
+		id = func_by_name(access_name);
+		if (id >= 0)
+		{
+			WAIT_BUS("_wait", "_read");
+			return func_id;
+		}
+		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	if (ea_mode(opcode)<2)
@@ -522,12 +548,7 @@ int gen_move_from_sr(const char *mnemonic, int opcode)
 	}
 	else
 	{
-		char func_dest[MAX_NAME];
-		sprintf(func_dest, "%s_dest", func_name);
-
 		printf("\tEV = SR;\n");
-		if (get_ea(func_dest, opcode, op_size, 0) < 0)
-			return -1;
 
 		switch(op_size)
 		{
@@ -565,13 +586,23 @@ int gen_move_to_ccr(const char *mnemonic, int opcode)
 
 	if (ea_address(opcode))
 	{
+		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
-		READ_BUS("_ea", "EA", "EV", op_size);
+		sprintf(func_name, "%s_tcr_common", mnemonic);
+		sprintf(access_name, "%s_read", func_name);
+		id = func_by_name(access_name);
+		if (id >= 0)
+		{
+			WAIT_BUS("_wait", "_read");
+			return func_id;
+		}
+		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	printf("\tSET_DN_REG8(M68K_REG_SR, EV);\n");
+	printf("\tSR &= M68K_FLAG_ALL;\n");
 	printf("\tFETCH_OPCODE;\n}\n\n");
 	return func_id;
 }
