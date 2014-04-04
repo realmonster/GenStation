@@ -61,15 +61,64 @@ int ea_address(int opcode)
 	return (mode != 0) && (mode != 1) && (mode != 11);
 }
 
+#define HASH_SIZE (1<<18)
+#define HASH_MASK (HASH_SIZE-1)
+
+int func_hash[HASH_SIZE];
+int func_id[HASH_SIZE];
 char **func_names = 0;
 int func_count = 0;
 
-int func_by_name(const char* name)
+void hash_init(void)
 {
 	int i;
-	for (i=0; i<func_count; ++i)
-		if (!strcmp(name, func_names[i]))
-			return i;
+	for (i=0; i<HASH_SIZE; ++i)
+		func_id[i] = -1;
+}
+
+int hash_str(const char* str)
+{
+	int i, hash;
+	hash = 0;
+	for (i=0; str[i]; ++i)
+	{
+		hash *= 21; // random constant
+		hash += str[i];
+	}
+	return hash;
+}
+
+void hash_insert(const char* name, int id)
+{
+	int i, c, hash;
+	hash = hash_str(name);
+	c = 0;
+	for (i = hash&HASH_MASK; func_id[i] != -1; i = (i+1)&HASH_MASK)
+		if (++c > HASH_SIZE*3)
+		{
+			fprintf(stderr, "Error! Hash is full! Increase HASH_SIZE\n");
+			exit(0);
+		}
+	func_id[i] = id;
+	func_hash[i] = hash;
+}
+
+int func_by_name(const char* name)
+{
+	int i, c, hash;
+	hash = hash_str(name);
+	c = 0;
+	for (i = hash&HASH_MASK; func_id[i] != -1; i = (i+1)&HASH_MASK)
+	{
+		if (++c > HASH_SIZE*3)
+		{
+			fprintf(stderr, "Error! Hash is full! Increase HASH_SIZE\n");
+			exit(0);
+		}
+		if (func_hash[i] == hash
+		 && !strcmp(name, func_names[func_id[i]]))
+			return func_id[i];
+	}
 	return -1;
 }
 
@@ -87,6 +136,7 @@ int declare_function(const char* name)
 	if (!func_names[func_count - 1])
 		return -1;
 
+	hash_insert(name, func_count - 1);
 	strcpy(func_names[func_count - 1], name);
 	return func_count - 1;
 }
@@ -256,7 +306,7 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 	op_size = (opcode >> 6) & 3;
 	if (!ea_alterable(opcode)
-	 || op_size == 3)
+	 || op_size == 3
 	 || ea_mode(opcode) == 1)
 		return invalid();
 
@@ -442,6 +492,8 @@ int main(void)
 	int i;
 	FILE *f;
 
+	hash_init();
+
 	declare_function("invalid");
 	declare_function("done_wait_wb");
 	declare_function("done_wait_ww");
@@ -464,7 +516,7 @@ int main(void)
 	{
 		valid[i] = gen_immediate("ori", i);
 		if (valid[i] < 0)
-			printf("Error at ori_%04X", i);
+			fprintf(stderr, "Error at ori_%04X\n", i);
 	}
 	for (i=0; i<0x4000; ++i)
 	{
@@ -472,7 +524,7 @@ int main(void)
 		{
 			valid[i] = gen_move("move", i);
 			if (valid[i] < 0)
-				printf("Error at move_%04X", i);
+				fprintf(stderr, "Error at move_%04X\n", i);
 		}
 	}
 
