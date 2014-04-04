@@ -61,6 +61,7 @@ int ea_address(int opcode)
 	return (mode != 0) && (mode != 1) && (mode != 11);
 }
 
+#define MAX_NAME (100)
 #define HASH_SIZE (1<<18)
 #define HASH_MASK (HASH_SIZE-1)
 
@@ -160,6 +161,82 @@ sprintf(access_name, "%s" bus_access_str, func_name); \
 print_bus_wait(wait_name, access_name);\
 } else (void*)0
 
+void print_bus_read(const char* prefix, const char* address, const char* lval, int size)
+{
+	const char *func_name;
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+
+	func_name = prefix;
+	WAIT_BUS("_wait", "_read");
+
+	switch (size)
+	{
+		case 0:
+			printf("\t%s = READ_8(%s);\n", lval, address);
+			break;
+
+		case 1:
+			printf("\t%s = READ_16(%s);\n", lval, address);
+			break;
+
+		case 2:
+			printf("\t%s = READ_16(%s)<<16;\n", lval, address);
+
+			WAIT_BUS("_wait2", "_read2");
+
+			printf("\t%s |= READ_16(%s + 2);\n", lval, address);
+			break;
+	}
+}
+
+#define READ_BUS(str, address, lval, size) if (1) {\
+sprintf(access_name, "%s" str, func_name); \
+print_bus_read(access_name, address, lval, size);\
+} else (void*)0
+
+void print_bus_fetch(const char* prefix, const char* lval, int size)
+{
+	const char *func_name;
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+
+	func_name = prefix;
+	WAIT_BUS("_wait", "_read");
+
+	switch (size)
+	{
+		case 0:
+			printf("\t%s = (uint8_t)READ_16(PC);\n", lval);
+			break;
+
+		case 1:
+			printf("\t%s = READ_16(PC);\n", lval);
+			break;
+
+		case 2:
+			printf("\t%s = READ_16(PC)<<16;\n", lval);
+			printf("\tPC += 2;\n");
+
+			WAIT_BUS("_wait2", "_read2");
+
+			printf("\t%s |= READ_16(PC);\n", lval);
+			break;
+
+		default:
+			fprintf(stderr, "Error: invalid bus fetch size %d in %s\n", size, prefix);
+			exit(0);
+			break;
+	}
+	printf("\tPC += 2;\n");
+}
+
+#define FETCH_BUS(str, lval, size) if (1) {\
+sprintf(access_name, "%s" str, func_name); \
+print_bus_fetch(access_name, lval, size);\
+} else (void*)0
+
+
 int invalid(void)
 {
 	return func_by_name("invalid");
@@ -237,7 +314,7 @@ int get_ea(const char *func_name, int opcode, int op_size, int read)
 "							+m68k->reg[M68K_REG_%c%c]\n"
 "							+REG_D((EA>>12)&0xF);\n"
 "	else\n"
-"		m68k->effective_address = (uint32_t)(int8_t)EA\n"
+"		EA = (uint32_t)(int8_t)EA\n"
 "							+m68k->reg[M68K_REG_%c%c]\n"
 "							+(int16_t)REG_D((EA>>12)&0xF);\n"
 "	PC += 2;\n"
@@ -268,29 +345,7 @@ int get_ea(const char *func_name, int opcode, int op_size, int read)
 			break;
 
 		case 11: // #<data>
-			WAIT_BUS("_wait_imm", "_read_imm");
-
-			switch(op_size)
-			{
-				case 0:
-					printf("\tEV = (int8_t)READ_16(PC);\n");
-					break;
-
-				case 1:
-					printf("\tEV = (int16_t)READ_16(PC);\n");
-					break;
-
-				case 2:
-					printf("\tEV = READ_16(PC)<<16;\n");
-					printf("\tPC += 2;\n");
-
-					WAIT_BUS("_wait_imm2", "_read_imm2");
-
-					printf("\tEV |= READ_16(PC);\n");
-					break;
-			}
-			printf("\tPC += 2;\n");
-
+			FETCH_BUS("_imm", "EV", op_size);
 			break;
 	}
 	return 0;
@@ -298,9 +353,9 @@ int get_ea(const char *func_name, int opcode, int op_size, int read)
 
 int gen_immediate(const char *mnemonic, int opcode)
 {
-	char func_name[100];
-	char wait_name[100];
-	char access_name[100];
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
 	int func_id;
 	int op_size;
 
@@ -316,28 +371,7 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 	printf("M68K_FUNCTION(%s)\n{\n", func_name);
 
-	WAIT_BUS("", "_read");
-
-	switch(op_size)
-	{
-		case 0:
-			printf("\tOP = READ_8(PC);\n");
-			break;
-
-		case 1:
-			printf("\tOP = READ_16(PC);\n");
-			break;
-
-		case 2:
-			printf("\tOP = READ_16(PC)<<16;\n");
-			printf("\tPC += 2;\n");
-
-			WAIT_BUS("_wait_2", "_read_2");
-
-			printf("\tOP |= READ_16(PC);\n");
-			break;
-	}
-	printf("\tPC += 2;\n");
+	FETCH_BUS("", "OP", op_size);
 
 	if (get_ea(func_name, opcode, op_size, 1) < 0)
 		return -1;
@@ -347,26 +381,7 @@ int gen_immediate(const char *mnemonic, int opcode)
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
-		WAIT_BUS("_wait_ea", "_read_ea");
-
-		switch (op_size)
-		{
-			case 0:
-				printf("\tEV = READ_8(EA);\n");
-				break;
-
-			case 1:
-				printf("\tEV = READ_16(EA);\n");
-				break;
-
-			case 2:
-				printf("\tEV = READ_16(EA)<<16;\n");
-
-				WAIT_BUS("_wait_ea2", "_read_ea2");
-
-				printf("\tEV |= READ_16(EA + 2);\n");
-				break;
-		}
+		READ_BUS("_ea", "EA", "EV", op_size);
 	}
 
 	printf("\t{\n\t\tuint%d_t result = EV | OP;\n", 8<<op_size);
@@ -395,9 +410,9 @@ int gen_immediate(const char *mnemonic, int opcode)
 
 int gen_move(const char *mnemonic, int opcode)
 {
-	char func_name[100];
-	char wait_name[100];
-	char access_name[100];
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
 	int func_id;
 	int op_size;
 	int op_dest;
@@ -427,26 +442,7 @@ int gen_move(const char *mnemonic, int opcode)
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
-		WAIT_BUS("_wait_ea", "_read_ea");
-
-		switch (op_size)
-		{
-			case 0:
-				printf("\tEV = READ_8(EA);\n");
-				break;
-
-			case 1:
-				printf("\tEV = READ_16(EA);\n");
-				break;
-
-			case 2:
-				printf("\tEV = READ_16(EA)<<16;\n");
-
-				WAIT_BUS("_wait_ea2", "_read_ea2");
-
-				printf("\tEV |= READ_16(EA + 2);\n");
-				break;
-		}
+		READ_BUS("_ea", "EA", "EV", op_size);
 	}
 
 	printf("\t{\n\t\tuint%d_t result = EV;\n", 8<<op_size);
