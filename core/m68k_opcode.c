@@ -20,7 +20,7 @@
 
 M68K_FUNCTION(invalid)
 {
-	printf("invalid");
+	printf("invalid\n");
 	TIMEOUT(1<<20, invalid); // almost maximum int32
 }
 
@@ -75,5 +75,8 @@ void m68k_init(m68k_context *m68k)
 	//	build_opcode_table();
 
 	memset(m68k->reg, 0, sizeof(m68k->reg));
+	REG_D(M68K_REG_A7) = (READ_16(0)<<16)|READ_16(2);
+	PC = (READ_16(4)<<16)|READ_16(6);
+	SR = M68K_FLAG_S_MASK | M68K_FLAG_I0_MASK | M68K_FLAG_I1_MASK | M68K_FLAG_I2_MASK;
 	FETCH_OPCODE;
 }

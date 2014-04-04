@@ -481,6 +481,101 @@ int gen_move(const char *mnemonic, int opcode)
 	return func_id;
 }
 
+int gen_move_from_sr(const char *mnemonic, int opcode)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+	int op_size;
+
+	op_size = 1;
+
+	if (!ea_alterable(opcode)
+	 || ea_mode(opcode) == 1)
+		return invalid();
+
+	sprintf(func_name, "%s_%04X", mnemonic, opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	if (ea_address(opcode))
+	{
+		if (get_ea(func_name, opcode, op_size, 1) < 0)
+			return -1;
+	}
+
+	if (ea_address(opcode))
+	{
+		if (op_size)
+			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
+
+		READ_BUS("_ea", "EA", "EV", op_size);
+	}
+
+	if (ea_mode(opcode)<2)
+	{
+		printf("\tSET_DN_REG%d(%d, SR);\n", 8<<op_size, opcode&0xF);
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	else
+	{
+		char func_dest[MAX_NAME];
+		sprintf(func_dest, "%s_dest", func_name);
+
+		printf("\tEV = SR;\n");
+		if (get_ea(func_dest, opcode, op_size, 0) < 0)
+			return -1;
+
+		switch(op_size)
+		{
+			case 0: print_bus_wait("done_wait_wb", "done_write_wb"); break;
+			case 1: print_bus_wait("done_wait_ww", "done_write_ww"); break;
+			case 2: print_bus_wait("done_wait_wl", "done_write_wl"); break;
+		}
+	}
+	return func_id;
+}
+
+int gen_move_to_ccr(const char *mnemonic, int opcode)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+	int op_size;
+	int op_dest;
+
+	op_size = 1;
+
+	if (ea_mode(opcode) == 1
+	 || ea_mode(opcode) < 0)
+		return invalid();
+
+	sprintf(func_name, "%s_%04X", mnemonic, opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	if (get_ea(func_name, opcode, op_size, 1) < 0)
+		return -1;
+
+	if (ea_address(opcode))
+	{
+		if (op_size)
+			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
+
+		READ_BUS("_ea", "EA", "EV", op_size);
+	}
+
+	printf("\tSET_DN_REG8(M68K_REG_SR, EV);\n");
+	printf("\tFETCH_OPCODE;\n}\n\n");
+	return func_id;
+}
+
 int valid[0x10000];
 
 int main(void)
@@ -522,6 +617,18 @@ int main(void)
 			if (valid[i] < 0)
 				fprintf(stderr, "Error at move_%04X\n", i);
 		}
+	}
+	for (i=0x40C0; i<(0x40C0+0x40); ++i)
+	{
+		valid[i] = gen_move_from_sr("move", i);
+		if (valid[i] < 0)
+			fprintf(stderr, "Error at move_%04X\n", i);
+	}
+	for (i=0x44C0; i<(0x44C0+0x40); ++i)
+	{
+		valid[i] = gen_move_to_ccr("move", i);
+		if (valid[i] < 0)
+			fprintf(stderr, "Error at move_%04X\n", i);
 	}
 
 	f = fopen("m68k_optable.h","wb");
