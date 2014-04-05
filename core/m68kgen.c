@@ -69,6 +69,26 @@ int func_hash[HASH_SIZE];
 int func_id[HASH_SIZE];
 char **func_names = 0;
 int func_count = 0;
+int valid[0x10000];
+
+void add_opcode(int func_id, int opcode)
+{
+	if (func_id<0)
+	{
+		fprintf(stderr, "Error: at generation of opcode %04X\n", opcode);
+		exit(0);
+	}
+
+	if (func_id == invalid())
+		return;
+
+	if (valid[opcode] != invalid())
+	{
+		fprintf(stderr, "Error: two opcode handlers at same opcode number %04X\n", opcode);
+		exit(0);
+	}
+	valid[opcode] = func_id;
+}
 
 void hash_init(void)
 {
@@ -382,7 +402,7 @@ int gen_immediate(const char *mnemonic, int opcode)
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
-		sprintf(func_name, "%s_common", mnemonic);
+		sprintf(func_name, "%s_common_%d", mnemonic, op_size);
 		sprintf(access_name, "%s_read", func_name);
 		id = func_by_name(access_name);
 		if (id >= 0)
@@ -394,8 +414,8 @@ int gen_immediate(const char *mnemonic, int opcode)
 	}
 
 	printf("\t{\n\t\tuint%d_t result = EV | OP;\n", 8<<op_size);
-	printf("\t\tSET_N_FLAG(result>>%d);\n", (8<<op_size)-1);
-	printf("\t\tSET_Z_FLAG(result?0:1);\n");
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
 	printf("\t\tSET_V_FLAG(0);\n");
 	printf("\t\tSET_C_FLAG(0);\n");
 	if (ea_mode(opcode) < 2)
@@ -415,6 +435,14 @@ int gen_immediate(const char *mnemonic, int opcode)
 		}
 	}
 	return func_id;
+}
+
+void ori(int opcode)
+{
+	if ((opcode & 0xFF00) != 0)
+		return;
+
+	add_opcode(gen_immediate("ori", opcode), opcode);
 }
 
 int gen_move(const char *mnemonic, int opcode)
@@ -466,8 +494,8 @@ int gen_move(const char *mnemonic, int opcode)
 	printf("\t{\n\t\tuint%d_t result = EV;\n", 8<<op_size);
 	if (ea_mode(op_dest) != 1)
 	{
-		printf("\t\tSET_N_FLAG(result>>%d);\n", (8<<op_size)-1);
-		printf("\t\tSET_Z_FLAG(result?0:1);\n");
+		printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+		printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
 		printf("\t\tSET_V_FLAG(0);\n");
 		printf("\t\tSET_C_FLAG(0);\n");
 	}
@@ -496,6 +524,13 @@ int gen_move(const char *mnemonic, int opcode)
 		}
 	}
 	return func_id;
+}
+
+void move(int opcode)
+{
+	if ((opcode & 0xC000) != 0)
+		return;
+	add_opcode(gen_move("move", opcode), opcode);
 }
 
 int gen_move_from_sr(const char *mnemonic, int opcode)
@@ -560,6 +595,13 @@ int gen_move_from_sr(const char *mnemonic, int opcode)
 	return func_id;
 }
 
+void move_fsr(int opcode)
+{
+	if ((opcode & 0xFFC0) != 0x40C0)
+		return;
+	add_opcode(gen_move_from_sr("move", opcode), opcode);
+}
+
 int gen_move_to_ccr(const char *mnemonic, int opcode)
 {
 	char func_name[MAX_NAME];
@@ -568,8 +610,10 @@ int gen_move_to_ccr(const char *mnemonic, int opcode)
 	int func_id;
 	int op_size;
 	int op_dest;
+	int sr;
 
 	op_size = 1;
+	sr = opcode & 0x200;
 
 	if (ea_mode(opcode) == 1
 	 || ea_mode(opcode) < 0)
@@ -581,6 +625,9 @@ int gen_move_to_ccr(const char *mnemonic, int opcode)
 
 	printf("M68K_FUNCTION(%s)\n{\n", func_name);
 
+	if (sr)
+		printf("if (SUPERVISOR) PRIVILEGE_EXCEPTION;\n");
+
 	if (get_ea(func_name, opcode, op_size, 1) < 0)
 		return -1;
 
@@ -590,7 +637,10 @@ int gen_move_to_ccr(const char *mnemonic, int opcode)
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
-		sprintf(func_name, "%s_tcr_common", mnemonic);
+		if (sr)
+			sprintf(func_name, "%s_sr_common", mnemonic);
+		else
+			sprintf(func_name, "%s_tcr_common", mnemonic);
 		sprintf(access_name, "%s_read", func_name);
 		id = func_by_name(access_name);
 		if (id >= 0)
@@ -601,13 +651,21 @@ int gen_move_to_ccr(const char *mnemonic, int opcode)
 		READ_BUS("", "EA", "EV", op_size);
 	}
 
-	printf("\tSET_DN_REG8(M68K_REG_SR, EV);\n");
+	if (sr)
+		printf("\tSR = EV;\n");
+	else
+		printf("\tSET_DN_REG8(M68K_REG_SR, EV);\n");
 	printf("\tSR &= M68K_FLAG_ALL;\n");
 	printf("\tFETCH_OPCODE;\n}\n\n");
 	return func_id;
 }
 
-int valid[0x10000];
+void move_tcr(int opcode)
+{
+	if ((opcode & 0xFDC0) != 0x44C0)
+		return;
+	add_opcode(gen_move_to_ccr("move", opcode), opcode);
+}
 
 int main(void)
 {
@@ -629,37 +687,16 @@ int main(void)
 	declare_function("opcode_wait");
 	declare_function("opcode_read");
 
-	for (i=0; i<0x10000; ++i)
-		valid[i] = invalid();
-
 	printf("#include \"m68k_opcode.h\"\n");
 	printf("#include \"m68k_optable.h\"\n\n");
-	for (i=0; i<0x100; ++i)
+
+	for (i=0; i<0x10000; ++i)
 	{
-		valid[i] = gen_immediate("ori", i);
-		if (valid[i] < 0)
-			fprintf(stderr, "Error at ori_%04X\n", i);
-	}
-	for (i=0; i<0x4000; ++i)
-	{
-		if (valid[i] == invalid())
-		{
-			valid[i] = gen_move("move", i);
-			if (valid[i] < 0)
-				fprintf(stderr, "Error at move_%04X\n", i);
-		}
-	}
-	for (i=0x40C0; i<(0x40C0+0x40); ++i)
-	{
-		valid[i] = gen_move_from_sr("move", i);
-		if (valid[i] < 0)
-			fprintf(stderr, "Error at move_%04X\n", i);
-	}
-	for (i=0x44C0; i<(0x44C0+0x40); ++i)
-	{
-		valid[i] = gen_move_to_ccr("move", i);
-		if (valid[i] < 0)
-			fprintf(stderr, "Error at move_%04X\n", i);
+		valid[i] = invalid();
+		ori(i);
+		move(i);
+		move_fsr(i);
+		move_tcr(i);
 	}
 
 	f = fopen("m68k_optable.h","wb");

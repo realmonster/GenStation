@@ -24,7 +24,11 @@
 
 #define INVALID invalid(m68k)
 #define ADDRESS_EXCEPTION INVALID
+#define PRIVILEGE_EXCEPTION INVALID
+
 #define BUS_BUSY (m68k->fetched_value&1) // just to avoid optimization
+#define SUPERVISOR (SR & M68K_FLAG_S_MASK)
+
 #define BUS_WAIT_TIME 1
 #define READ_WAIT_TIME 4
 
@@ -49,6 +53,14 @@
 #define SET_Z_FLAG(val) SET_FLAG(M68K_FLAG_Z_BIT,val)
 #define SET_V_FLAG(val) SET_FLAG(M68K_FLAG_V_BIT,val)
 #define SET_C_FLAG(val) SET_FLAG(M68K_FLAG_C_BIT,val)
+
+#define SET_N_FLAG8(val) SET_N_FLAG(((val)>>7)&1)
+#define SET_N_FLAG16(val) SET_N_FLAG(((val)>>15)&1)
+#define SET_N_FLAG32(val) SET_N_FLAG(((val)>>31)&1)
+
+#define SET_Z_FLAG8(val) SET_Z_FLAG(((uint8_t)(val))?0:1)
+#define SET_Z_FLAG16(val) SET_Z_FLAG(((uint16_t)(val))?0:1)
+#define SET_Z_FLAG32(val) SET_Z_FLAG(((uint32_t)(val))?0:1)
 
 #define SET_VAR8(var, val) (var) = ((var)&(~0xFF))|(val)
 #define SET_VAR16(var, val) (var) = ((var)&(~0xFFFF))|(val)
