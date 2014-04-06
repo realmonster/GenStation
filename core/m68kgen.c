@@ -58,6 +58,11 @@ int ea_valid(int opcode)
 	return (ea_mode(opcode) >= 0);
 }
 
+int ea_valid_na(int opcode)
+{
+	return (ea_mode(opcode) != 1 && ea_valid(opcode));
+}
+
 int ea_alterable_array[] = {1,1,1,1,1,1,1,1,1,0,0,0};
 
 int ea_alterable(int opcode)
@@ -305,7 +310,10 @@ int get_ea(const char *func_name, int opcode, int op_size, int read)
 
 		case 3: // (An)+
 			printf("\tEA = REG_A(%d);\n", opcode&7);
-			printf("\tREG_A(%d) += %d;\n", opcode&7, 1<<op_size);
+			if (op_size == 0 && (opcode&7) == 7) // sp
+				printf("\tREG_A(7) += 2;\n");
+			else
+				printf("\tREG_A(%d) += %d;\n", opcode&7, 1<<op_size);
 			break;
 
 		case 4: // -(An)
@@ -318,7 +326,10 @@ int get_ea(const char *func_name, int opcode, int op_size, int read)
 				printf("M68K_FUNCTION(%s)\n{\n",wait_name);
 			}
 
-			printf("\tREG_A(%d) -= %d;\n", opcode&7, 1<<op_size);
+			if (op_size == 0 && (opcode&7) == 7) // sp
+				printf("\tREG_A(7) -= 2;\n");
+			else
+				printf("\tREG_A(%d) -= %d;\n", opcode&7, 1<<op_size);
 			printf("\tEA = REG_A(%d);\n", opcode&7);
 			break;
 
@@ -434,6 +445,11 @@ int gen_immediate(const char *mnemonic, int opcode, opcode_handler handler)
 
 	if (handler(opcode) < 0)
 		return -1;
+	if ((opcode & 0xFF00) == 0xC00) // cmpi
+	{
+		printf("\t}\n\tFETCH_OPCODE;\n}\n\n");
+		return func_id;
+	}
 	if (ea_mode(opcode) < 2)
 	{
 		printf("\t\tSET_DN_REG%d(%d, result);\n\t}\n", 8<<op_size, opcode&0xF);
@@ -588,6 +604,221 @@ void eori(int opcode)
 		return;
 
 	add_opcode(gen_immediate("eori", opcode, eori_handler), opcode);
+}
+
+int cmpi_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(EV - OP);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_V_FLAG%d(EV, -OP, result);\n", 8<<op_size);
+	printf("\t\tSET_C_FLAG((uint%d_t)EV < (uint%d_t)OP?1:0);\n", 8<<op_size, 8<<op_size);
+	return 0;
+}
+
+void cmpi(int opcode)
+{
+	if ((opcode & 0xFF00) != 0xC00)
+		return;
+
+	add_opcode(gen_immediate("cmpi", opcode, cmpi_handler), opcode);
+}
+
+int gen_bit(const char *mnemonic, int opcode, opcode_handler handler)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+	int type;
+	int dn;
+
+	if (handler(check(opcode)) < 0)
+		return invalid();
+
+	type = (opcode&0x100);
+	dn = (opcode>>9)&7;
+
+	sprintf(func_name, "%s_%04X", mnemonic, opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	if (type)
+		printf("\tOP = REG_D(%d);\n", dn);
+	else
+		FETCH_BUS("", "OP", 0);
+
+	if (get_ea(func_name, opcode, 0, 1) < 0)
+		return -1;
+
+	if (ea_address(opcode))
+	{
+		int id;
+
+		sprintf(func_name, "%s_common", mnemonic);
+		sprintf(access_name, "%s_read", func_name);
+		id = func_by_name(access_name);
+		if (id >= 0)
+		{
+			WAIT_BUS("_wait", "_read");
+			return func_id;
+		}
+		READ_BUS("", "EA", "EV", 0);
+	}
+
+	if (handler(opcode) < 0)
+		return -1;
+	if ((opcode & 0xF0C0) == 0) // btst
+	{
+		printf("\t}\n\tFETCH_OPCODE;\n}\n\n");
+		return func_id;
+	}
+	if (ea_mode(opcode) < 2)
+	{
+		printf("\t\tSET_DN_REG32(%d, result);\n\t}\n", opcode&0xF);
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	else
+	{
+		printf("\t\tEV = result;\n\t}\n");
+		print_bus_wait("done_wait_wb", "done_write_wb");
+	}
+	return func_id;
+}
+
+int btst_handler(int opcode)
+{
+	if (!ea_valid_na(opcode))
+		return -1;
+
+	if ((opcode&0x100) == 0 && ((opcode>>9)&7) != 4)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	if (ea_address(opcode))
+		printf("\t{\n\t\tuint8_t result = ((~EV)>>(OP&7))&1;\n");
+	else
+		printf("\t{\n\t\tuint32_t result = ((~EV)>>(OP&31))&1;\n");
+
+	printf("\t\tSET_Z_FLAG(result);\n");
+	return 0;
+}
+
+void btst(int opcode)
+{
+	if ((opcode & 0xF0C0) != 0)
+		return;
+
+	add_opcode(gen_bit("btst", opcode, btst_handler), opcode);
+}
+
+int bchg_handler(int opcode)
+{
+	if (!ea_alterable_na(opcode))
+		return -1;
+
+	if ((opcode&0x100) == 0 && ((opcode>>9)&7) != 4)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	if (ea_address(opcode))
+	{
+		printf("\t{\n\t\tuint8_t result = EV^(1<<(OP&7));\n");
+		printf("\t\tSET_Z_FLAG((result>>(OP&7))&1);\n");
+	}
+	else
+	{
+		printf("\t{\n\t\tuint32_t result = EV^(1<<(OP&31));\n");
+		printf("\t\tSET_Z_FLAG((result>>(OP&31))&1);\n");
+	}
+	return 0;
+}
+
+void bchg(int opcode)
+{
+	if ((opcode & 0xF0C0) != 0x40)
+		return;
+
+	add_opcode(gen_bit("bchg", opcode, bchg_handler), opcode);
+}
+
+int bclr_handler(int opcode)
+{
+	if (!ea_alterable_na(opcode))
+		return -1;
+
+	if ((opcode&0x100) == 0 && ((opcode>>9)&7) != 4)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	if (ea_address(opcode))
+	{
+		printf("\t{\n\t\tuint8_t result = EV&(~(1<<(OP&7)));\n");
+		printf("\t\tSET_Z_FLAG(((~EV)>>(OP&7))&1);\n");
+	}
+	else
+	{
+		printf("\t{\n\t\tuint32_t result = EV&(~(1<<(OP&31)));\n");
+		printf("\t\tSET_Z_FLAG(((~EV)>>(OP&31))&1);\n");
+	}
+	return 0;
+}
+
+void bclr(int opcode)
+{
+	if ((opcode & 0xF0C0) != 0x80)
+		return;
+
+	add_opcode(gen_bit("bclr", opcode, bclr_handler), opcode);
+}
+
+int bset_handler(int opcode)
+{
+	if (!ea_alterable_na(opcode))
+		return -1;
+
+	if ((opcode&0x100) == 0 && ((opcode>>9)&7) != 4)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	if (ea_address(opcode))
+	{
+		printf("\t{\n\t\tuint8_t result = EV|(1<<(OP&7));\n");
+		printf("\t\tSET_Z_FLAG(((~EV)>>(OP&7))&1);\n");
+	}
+	else
+	{
+		printf("\t{\n\t\tuint32_t result = EV|(1<<(OP&31));\n");
+		printf("\t\tSET_Z_FLAG(((~EV)>>(OP&31))&1);\n");
+	}
+	return 0;
+}
+
+void bset(int opcode)
+{
+	if ((opcode & 0xF0C0) != 0xC0)
+		return;
+
+	add_opcode(gen_bit("bset", opcode, bset_handler), opcode);
 }
 
 int gen_move(const char *mnemonic, int opcode)
@@ -843,6 +1074,11 @@ int main(void)
 		subi(i);
 		addi(i);
 		eori(i);
+		cmpi(i);
+		btst(i);
+		bchg(i);
+		bclr(i);
+		bset(i);
 		move(i);
 		move_fsr(i);
 		move_tcr(i);
