@@ -18,7 +18,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define GENERATE_FAILED -1
+int is_checking(int opcode)
+{
+	return (opcode & 0x10000);
+}
+
+int check(int opcode)
+{
+	return (opcode | 0x10000);
+}
 
 int ea_mode(int opcode)
 {
@@ -45,6 +53,11 @@ int ea_mode(int opcode)
 	}
 }
 
+int ea_valid(int opcode)
+{
+	return (ea_mode(op_code) >= 0);
+}
+
 int ea_alterable_array[] = {1,1,1,1,1,1,1,1,1,0,0,0};
 
 int ea_alterable(int opcode)
@@ -53,6 +66,12 @@ int ea_alterable(int opcode)
 	if (mode < 0)
 		return 0;
 	return ea_alterable_array[mode];
+}
+
+// not An
+int ea_alterable_na(int opcode)
+{
+	return (ea_mode(opcode) != 1 && ea_alterable(opcode));
 }
 
 int ea_address(int opcode)
@@ -371,7 +390,9 @@ int get_ea(const char *func_name, int opcode, int op_size, int read)
 	return 0;
 }
 
-int gen_immediate(const char *mnemonic, int opcode)
+typedef int (*opcode_handler)(int opcode);
+
+int gen_immediate(const char *mnemonic, int opcode, opcode_handler handler)
 {
 	char func_name[MAX_NAME];
 	char wait_name[MAX_NAME];
@@ -380,9 +401,7 @@ int gen_immediate(const char *mnemonic, int opcode)
 	int op_size;
 
 	op_size = (opcode >> 6) & 3;
-	if (!ea_alterable(opcode)
-	 || op_size == 3
-	 || ea_mode(opcode) == 1)
+	if (handler(check(opcode)) < 0)
 		return invalid();
 
 	sprintf(func_name, "%s_%04X", mnemonic, opcode);
@@ -413,11 +432,8 @@ int gen_immediate(const char *mnemonic, int opcode)
 		READ_BUS("", "EA", "EV", op_size);
 	}
 
-	printf("\t{\n\t\tuint%d_t result = EV | OP;\n", 8<<op_size);
-	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
-	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
-	printf("\t\tSET_V_FLAG(0);\n");
-	printf("\t\tSET_C_FLAG(0);\n");
+	if (handler(opcode) < 0)
+		return -1;
 	if (ea_mode(opcode) < 2)
 	{
 		printf("\t\tSET_DN_REG%d(%d, result);\n\t}\n", 8<<op_size, opcode&0xF);
@@ -437,12 +453,141 @@ int gen_immediate(const char *mnemonic, int opcode)
 	return func_id;
 }
 
+int ori_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(EV | OP);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_V_FLAG(0);\n");
+	printf("\t\tSET_C_FLAG(0);\n");
+	return 0;
+}
+
 void ori(int opcode)
 {
 	if ((opcode & 0xFF00) != 0)
 		return;
 
-	add_opcode(gen_immediate("ori", opcode), opcode);
+	add_opcode(gen_immediate("ori", opcode, ori_handler), opcode);
+}
+
+int andi_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(EV & OP);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_V_FLAG(0);\n");
+	printf("\t\tSET_C_FLAG(0);\n");
+	return 0;
+}
+
+void andi(int opcode)
+{
+	if ((opcode & 0xFF00) != 0x200)
+		return;
+
+	add_opcode(gen_immediate("andi", opcode, andi_handler), opcode);
+}
+
+int subi_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(EV - OP);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_C_FLAG((uint%d_t)EV < (uint%d_t)OP?1:0);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_X_FLAG((uint%d_t)EV < (uint%d_t)OP?1:0);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_V_FLAG%d(EV, OP, result);\n", 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	return 0;
+}
+
+void subi(int opcode)
+{
+	if ((opcode & 0xFF00) != 0x400)
+		return;
+
+	add_opcode(gen_immediate("subi", opcode, subi_handler), opcode);
+}
+
+int addi_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(EV + OP);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_C_FLAG((uint%d_t)result < (uint%d_t)OP?1:0);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_X_FLAG((uint%d_t)result < (uint%d_t)OP?1:0);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_V_FLAG%d(EV, OP, result);\n", 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	return 0;
+}
+
+void addi(int opcode)
+{
+	if ((opcode & 0xFF00) != 0x600)
+		return;
+
+	add_opcode(gen_immediate("addi", opcode, addi_handler), opcode);
+}
+
+int eori_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(EV ^ OP);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_V_FLAG(0);\n");
+	printf("\t\tSET_C_FLAG(0);\n");
+	return 0;
+}
+
+void eori(int opcode)
+{
+	if ((opcode & 0xFF00) != 0xA00)
+		return;
+
+	add_opcode(gen_immediate("eori", opcode, eori_handler), opcode);
 }
 
 int gen_move(const char *mnemonic, int opcode)
@@ -694,6 +839,10 @@ int main(void)
 	{
 		valid[i] = invalid();
 		ori(i);
+		andi(i);
+		subi(i);
+		addi(i);
+		eori(i);
 		move(i);
 		move_fsr(i);
 		move_tcr(i);
