@@ -55,7 +55,7 @@ int ea_mode(int opcode)
 
 int ea_valid(int opcode)
 {
-	return (ea_mode(op_code) >= 0);
+	return (ea_mode(opcode) >= 0);
 }
 
 int ea_alterable_array[] = {1,1,1,1,1,1,1,1,1,0,0,0};
@@ -521,7 +521,7 @@ int subi_handler(int opcode)
 	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(EV - OP);\n", 8<<op_size, 8<<op_size);
 	printf("\t\tSET_C_FLAG((uint%d_t)EV < (uint%d_t)OP?1:0);\n", 8<<op_size, 8<<op_size);
 	printf("\t\tSET_X_FLAG((uint%d_t)EV < (uint%d_t)OP?1:0);\n", 8<<op_size, 8<<op_size);
-	printf("\t\tSET_V_FLAG%d(EV, OP, result);\n", 8<<op_size);
+	printf("\t\tSET_V_FLAG%d(EV, -OP, result);\n", 8<<op_size);
 	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
 	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
 	return 0;

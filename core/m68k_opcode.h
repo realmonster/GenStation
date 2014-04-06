@@ -64,7 +64,7 @@
 
 #define SET_V_FLAG8(src, dest, res) SET_V_FLAG((int8_t)(((src)^(res))&((dest)^(res)))<0?1:0)
 #define SET_V_FLAG16(src, dest, res) SET_V_FLAG((int16_t)(((src)^(res))&((dest)^(res)))<0?1:0)
-#define SET_V_FLAG32(src ,dest, res) SET_V_FLAG((int32_t)(((src)^(res))&((dest)^(res)))<0?1:0)
+#define SET_V_FLAG32(src, dest, res) SET_V_FLAG((int32_t)(((src)^(res))&((dest)^(res)))<0?1:0)
 
 #define SET_VAR8(var, val) (var) = ((var)&(~0xFF))|(val)
 #define SET_VAR16(var, val) (var) = ((var)&(~0xFFFF))|(val)

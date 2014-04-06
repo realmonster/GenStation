@@ -18,6 +18,9 @@
 #include "m68k.h"
 #include "m68k_opcode.h"
 
+#include <stdio.h>
+#include <string.h>
+
 M68K_FUNCTION(invalid)
 {
 	printf("invalid\n");
