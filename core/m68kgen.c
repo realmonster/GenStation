@@ -821,6 +821,180 @@ void bset(int opcode)
 	add_opcode(gen_bit("bset", opcode, bset_handler), opcode);
 }
 
+int gen_unary(const char *mnemonic, int opcode, opcode_handler handler)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+	int op_size;
+
+	op_size = (opcode >> 6) & 3;
+	if (handler(check(opcode)) < 0)
+		return invalid();
+
+	sprintf(func_name, "%s_%04X", mnemonic, opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	if (get_ea(func_name, opcode, op_size, 1) < 0)
+		return -1;
+
+	if (ea_address(opcode))
+	{
+		int id;
+		if (op_size)
+			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
+
+		sprintf(func_name, "%s_common_%d", mnemonic, op_size);
+		sprintf(access_name, "%s_read", func_name);
+		id = func_by_name(access_name);
+		if (id >= 0)
+		{
+			WAIT_BUS("_wait", "_read");
+			return func_id;
+		}
+		READ_BUS("", "EA", "EV", op_size);
+	}
+
+	if (handler(opcode) < 0)
+		return -1;
+	if ((opcode & 0xFF00) == 0xC00) // cmpi
+	{
+		printf("\t}\n\tFETCH_OPCODE;\n}\n\n");
+		return func_id;
+	}
+	if (ea_mode(opcode) < 2)
+	{
+		printf("\t\tSET_DN_REG%d(%d, result);\n\t}\n", 8<<op_size, opcode&0xF);
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	else
+	{
+		printf("\t\tEV = result;\n\t}\n");
+
+		switch(op_size)
+		{
+			case 0: print_bus_wait("done_wait_wb", "done_write_wb"); break;
+			case 1: print_bus_wait("done_wait_ww", "done_write_ww"); break;
+			case 2: print_bus_wait("done_wait_wl", "done_write_wl"); break;
+		}
+	}
+	return func_id;
+}
+
+int negx_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(0 - EV - GET_X_FLAG());\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_X_FLAG(((uint%d_t)EV != 0 || GET_X_FLAG() != 0)?1:0);\n", 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tif (result) {SET_Z_FLAG(0);}\n");
+	printf("\t\tSET_V_FLAG((uint%d_t)result == (1<<(%d-1))?1:0);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_C_FLAG(((uint%d_t)EV != 0 || GET_X_FLAG() != 0)?1:0);\n", 8<<op_size);
+	return 0;
+}
+
+void negx(int opcode)
+{
+	if ((opcode & 0xFF00) != 0x4000)
+		return;
+
+	add_opcode(gen_unary("negx", opcode, negx_handler), opcode);
+}
+
+int clr_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = 0;\n", 8<<op_size);
+	printf("\t\tSET_N_FLAG(0);\n");
+	printf("\t\tSET_Z_FLAG(1);\n");
+	printf("\t\tSET_V_FLAG(0);\n");
+	printf("\t\tSET_C_FLAG(0);\n");
+	return 0;
+}
+
+void clr(int opcode)
+{
+	if ((opcode & 0xFF00) != 0x4200)
+		return;
+
+	add_opcode(gen_unary("clr", opcode, clr_handler), opcode);
+}
+
+int neg_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(- EV);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_X_FLAG(((uint%d_t)EV != 0)?1:0);\n", 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_V_FLAG((uint%d_t)result == (1<<(%d-1))?1:0);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_C_FLAG(((uint%d_t)EV != 0)?1:0);\n", 8<<op_size);
+	return 0;
+}
+
+void neg(int opcode)
+{
+	if ((opcode & 0xFF00) != 0x4400)
+		return;
+
+	add_opcode(gen_unary("neg", opcode, neg_handler), opcode);
+}
+
+int not_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)(~EV);\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_V_FLAG(0);\n");
+	printf("\t\tSET_C_FLAG(0);\n");
+	return 0;
+}
+
+void not(int opcode)
+{
+	if ((opcode & 0xFF00) != 0x4600)
+		return;
+
+	add_opcode(gen_unary("not", opcode, not_handler), opcode);
+}
+
 int gen_move(const char *mnemonic, int opcode)
 {
 	char func_name[MAX_NAME];
@@ -1079,6 +1253,10 @@ int main(void)
 		bchg(i);
 		bclr(i);
 		bset(i);
+		negx(i);
+		clr(i);
+		neg(i);
+		not(i);
 		move(i);
 		move_fsr(i);
 		move_tcr(i);

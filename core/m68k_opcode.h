@@ -47,6 +47,13 @@
 #define WRITE_16(address, value) m68k->write_w(m68k, (address), (value))
 #define WRITE_8(address, value) m68k->write_b(m68k, (address), (value))
 
+#define GET_FLAG(bit) ((m68k->reg[M68K_REG_SR] >> (bit))&1)
+#define GET_X_FLAG()  (GET_FLAG(M68K_FLAG_X_BIT))
+#define GET_N_FLAG()  (GET_FLAG(M68K_FLAG_N_BIT))
+#define GET_Z_FLAG()  (GET_FLAG(M68K_FLAG_Z_BIT))
+#define GET_V_FLAG()  (GET_FLAG(M68K_FLAG_V_BIT))
+#define GET_C_FLAG()  (GET_FLAG(M68K_FLAG_C_BIT))
+
 #define SET_FLAG(bit,val) m68k->reg[M68K_REG_SR] = (m68k->reg[M68K_REG_SR]&(~(1<<(bit))))|((val)<<(bit))
 #define SET_X_FLAG(val) SET_FLAG(M68K_FLAG_X_BIT,val)
 #define SET_N_FLAG(val) SET_FLAG(M68K_FLAG_N_BIT,val)
