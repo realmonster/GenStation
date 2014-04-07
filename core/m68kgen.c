@@ -861,7 +861,7 @@ int gen_unary(const char *mnemonic, int opcode, opcode_handler handler)
 
 	if (handler(opcode) < 0)
 		return -1;
-	if ((opcode & 0xFF00) == 0xC00) // cmpi
+	if ((opcode & 0xFF00) == 0x4A00) // tst
 	{
 		printf("\t}\n\tFETCH_OPCODE;\n}\n\n");
 		return func_id;
@@ -993,6 +993,83 @@ void not(int opcode)
 		return;
 
 	add_opcode(gen_unary("not", opcode, not_handler), opcode);
+}
+
+void swap(int opcode)
+{
+	char func_name[MAX_NAME];
+	int func_id;
+
+	if ((opcode & 0xFFF8) != 0x4840)
+		return;
+
+	sprintf(func_name, "swap_%04X", opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	printf("\tuint32_t result = (((uint32_t)REG_D(%d))>>16)|(((uint32_t)REG_D(%d))<<16);\n", opcode&7, opcode&7);
+	printf("\tSET_N_FLAG32(result);\n");
+	printf("\tSET_Z_FLAG32(result);\n");
+	printf("\tSET_V_FLAG(0);\n");
+	printf("\tSET_C_FLAG(0);\n");
+	printf("\tSET_DN_REG32(%d, result);\n", opcode&7);
+	printf("\tFETCH_OPCODE;\n}\n\n");
+
+	add_opcode(func_id, opcode);
+}
+
+void ext(int opcode)
+{
+	char func_name[MAX_NAME];
+	int func_id;
+	int op_size;
+
+	op_size = ((opcode>>6)&1)+1;
+	if ((opcode & 0xFFB8) != 0x4880)
+		return;
+
+	sprintf(func_name, "ext_%04X", opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	printf("\tuint%d_t result = (int%d_t)REG_D(%d);\n", 8<<op_size, 8<<(op_size-1), opcode&7);
+	printf("\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	printf("\tSET_V_FLAG(0);\n");
+	printf("\tSET_C_FLAG(0);\n");
+	printf("\tSET_DN_REG%d(%d, result);\n", 8<<op_size, opcode&7);
+	printf("\tFETCH_OPCODE;\n}\n\n");
+
+	add_opcode(func_id, opcode);
+}
+
+int tst_handler(int opcode)
+{
+	int op_size = (opcode >> 6) & 3;
+
+	if (!ea_alterable_na(opcode)
+	 || op_size == 3)
+		return -1;
+
+	if (is_checking(opcode))
+		return 0;
+
+	printf("\t{\n\t\tuint%d_t result = (uint%d_t)EV;\n", 8<<op_size, 8<<op_size);
+	printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	printf("\t\tSET_V_FLAG(0);\n");
+	printf("\t\tSET_C_FLAG(0);\n");
+	return 0;
+}
+
+void tst(int opcode)
+{
+	if ((opcode & 0xFF00) != 0x4A00)
+		return;
+
+	add_opcode(gen_unary("tst", opcode, tst_handler), opcode);
 }
 
 int gen_move(const char *mnemonic, int opcode)
@@ -1257,6 +1334,9 @@ int main(void)
 		clr(i);
 		neg(i);
 		not(i);
+		swap(i);
+		ext(i);
+		tst(i);
 		move(i);
 		move_fsr(i);
 		move_tcr(i);
