@@ -85,6 +85,23 @@
 #define SET_AN_REG16(n, val) SET_VAR16(REG_A(n), (val))
 #define SET_AN_REG32(n, val) SET_VAR32(REG_A(n), (val))
 
+#define CONDITION_T (1)
+#define CONDITION_F (0)
+#define CONDITION_HI (!GET_C_FLAG() && !GET_Z_FLAG())
+#define CONDITION_LS (GET_C_FLAG() || GET_Z_FLAG())
+#define CONDITION_CC (!GET_C_FLAG())
+#define CONDITION_CS (GET_C_FLAG() != 0)
+#define CONDITION_NE (!GET_Z_FLAG())
+#define CONDITION_EQ (GET_Z_FLAG() != 0)
+#define CONDITION_VC (!GET_V_FLAG())
+#define CONDITION_VS (GET_V_FLAG() != 0)
+#define CONDITION_PL (!GET_N_FLAG())
+#define CONDITION_MI (GET_N_FLAG() != 0)
+#define CONDITION_GE ((GET_N_FLAG() != 0 && GET_V_FLAG() != 0) || (!GET_N_FLAG() && !GET_V_FLAG()))
+#define CONDITION_LT ((GET_N_FLAG() != 0 && !GET_V_FLAG()) || (!GET_N_FLAG() && GET_V_FLAG() != 0))
+#define CONDITION_GT (!GET_Z_FLAG() && (CONDITION_GE))
+#define CONDITION_LE (GET_Z_FLAG() != 0 || (CONDITION_LT))
+
 #define WAIT_BUS(bus_wait,bus_access) \
 if (BUS_BUSY) \
 	TIMEOUT(BUS_WAIT_TIME, bus_wait); \

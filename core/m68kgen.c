@@ -239,6 +239,40 @@ sprintf(access_name, "%s" str, func_name); \
 print_bus_read(access_name, address, lval, size);\
 } else (void*)0
 
+void print_bus_write(const char* prefix, const char* address, const char* val, int size)
+{
+	const char *func_name;
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+
+	func_name = prefix;
+	WAIT_BUS("_wait", "_write");
+
+	switch (size)
+	{
+		case 0:
+			printf("\tWRITE_8(%s, %s);\n", address, val);
+			break;
+
+		case 1:
+			printf("\tWRITE_16(%s, %s);\n", address, val);
+			break;
+
+		case 2:
+			printf("\tWRITE_16(%s, (%s)>>16);\n", address, val);
+
+			WAIT_BUS("_wait2", "_write2");
+
+			printf("\tWRITE_16(%s + 2, %s);\n", address, val);
+			break;
+	}
+}
+
+#define WRITE_BUS(str, address, val, size) if (1) {\
+sprintf(access_name, "%s" str, func_name); \
+print_bus_write(access_name, address, val, size);\
+} else (void*)0
+
 void print_bus_fetch(const char* prefix, const char* lval, int size)
 {
 	const char *func_name;
@@ -1072,6 +1106,62 @@ void tst(int opcode)
 	add_opcode(gen_unary("tst", opcode, tst_handler), opcode);
 }
 
+char* cc_names[] = {"t", "f", "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl", "mi", "ge", "lt", "gt", "le"};
+
+void bcc(int opcode)
+{
+	char func_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	int func_id;
+	int cc;
+	char* cc_str;
+
+	if ((opcode & 0xF000) != 0x6000)
+		return;
+
+	cc = (opcode>>8)&0xF;
+	if (cc == 0)
+		cc_str = "ra";
+	else if (cc == 1)
+		cc_str = "sr";
+	else
+		cc_str = cc_names[cc];
+
+	sprintf(func_name, "b%s_%04X", cc_str, opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	if ((opcode & 0xFF) == 0)
+	{
+		FETCH_BUS("", "OP", 1);
+		if (cc > 1)
+			printf("\tif (CONDITION_%c%c)\n", cc_names[cc][0]-'a'+'A', cc_names[cc][1]-'a'+'A');
+		if (cc == 1) // bsr
+		{
+			printf("\tREG_A(7) -= 4;\n");
+			WRITE_BUS("_pc", "REG_A(7)", "PC", 2);
+		}
+		printf("\t\tPC += (int16_t)OP - 2;\n");
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	else
+	{
+		if (cc > 1)
+			printf("\tif (CONDITION_%c%c)\n", cc_names[cc][0]-'a'+'A', cc_names[cc][1]-'a'+'A');
+		if (cc == 1) // bsr
+		{
+			printf("\tREG_A(7) -= 4;\n");
+			WRITE_BUS("_pc", "REG_A(7)", "PC", 2);
+		}
+		printf("\t\tPC += (int8_t)%d;\n", opcode&0xFF);
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	add_opcode(func_id, opcode);
+}
+
 int gen_move(const char *mnemonic, int opcode)
 {
 	char func_name[MAX_NAME];
@@ -1337,6 +1427,7 @@ int main(void)
 		swap(i);
 		ext(i);
 		tst(i);
+		bcc(i);
 		move(i);
 		move_fsr(i);
 		move_tcr(i);
