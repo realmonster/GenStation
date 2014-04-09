@@ -1141,6 +1141,8 @@ void stop(int opcode)
 
 	printf("M68K_FUNCTION(%s)\n{\n", func_name);
 
+	printf("\tif (!SUPERVISOR) PRIVILEGE_EXCEPTION;\n");
+
 	FETCH_BUS("", "OP", 1);
 
 	sprintf(wait_name, "%s_inf", func_name);
@@ -1242,6 +1244,132 @@ void rtr(int opcode)
 	add_opcode(func_id, opcode);
 }
 
+int gen_quick(const char *mnemonic, int opcode, opcode_handler handler)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+	int op_size;
+
+	op_size = (opcode >> 6) & 3;
+	if (!ea_alterable(opcode)
+	 || op_size == 3)
+		return invalid();
+
+	if (ea_mode(opcode) == 1
+	 && op_size == 0)
+		return invalid();
+
+	sprintf(func_name, "%s_%04X", mnemonic, opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	if (get_ea(func_name, opcode, op_size, 1) < 0)
+		return -1;
+
+	if (ea_address(opcode))
+	{
+		int id;
+		if (op_size)
+			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
+
+		sprintf(func_name, "%s_common_%02X", mnemonic, (op_size<<3)|((opcode>>9)&7));
+		sprintf(access_name, "%s_read", func_name);
+		id = func_by_name(access_name);
+		if (id >= 0)
+		{
+			WAIT_BUS("_wait", "_read");
+			return func_id;
+		}
+		READ_BUS("", "EA", "EV", op_size);
+	}
+
+	if (handler(opcode) < 0)
+		return -1;
+	if (ea_mode(opcode) < 2)
+	{
+		printf("\t\tSET_DN_REG%d(%d, result);\n\t}\n", 8<<(ea_mode(opcode)==1?2:op_size), opcode&0xF);
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	else
+	{
+		printf("\t\tEV = result;\n\t}\n");
+
+		switch(op_size)
+		{
+			case 0: print_bus_wait("done_wait_wb", "done_write_wb"); break;
+			case 1: print_bus_wait("done_wait_ww", "done_write_ww"); break;
+			case 2: print_bus_wait("done_wait_wl", "done_write_wl"); break;
+		}
+	}
+	return func_id;
+}
+
+int addq_handler(int opcode)
+{
+	int value;
+	int op_size = (opcode >> 6) & 3;
+
+	value = (opcode>>9)&7;
+	if (!value)
+		value = 8;
+
+	if (ea_mode(opcode) == 1)
+		printf("\t{\n\t\tuint32_t result = (uint32_t)(EV + %d);\n", value);
+	else
+	{
+		printf("\t{\n\t\tuint%d_t result = (uint%d_t)(EV + %d);\n", 8<<op_size, 8<<op_size, value);
+		printf("\t\tSET_C_FLAG((uint%d_t)result < (uint%d_t)%d?1:0);\n", 8<<op_size, 8<<op_size, value);
+		printf("\t\tSET_X_FLAG((uint%d_t)result < (uint%d_t)%d?1:0);\n", 8<<op_size, 8<<op_size, value);
+		printf("\t\tSET_V_FLAG%d(EV, %d, result);\n", 8<<op_size, value);
+		printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+		printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	}
+	return 0;
+}
+
+void addq(int opcode)
+{
+	if ((opcode & 0xF100) != 0x5000)
+		return;
+
+	add_opcode(gen_quick("addq", opcode, addq_handler), opcode);
+}
+
+int subq_handler(int opcode)
+{
+	int value;
+	int op_size = (opcode >> 6) & 3;
+
+	value = (opcode>>9)&7;
+	if (!value)
+		value = 8;
+
+	if (ea_mode(opcode) == 1)
+		printf("\t{\n\t\tuint32_t result = (uint32_t)(EV - %d);\n", value);
+	else
+	{
+		printf("\t{\n\t\tuint%d_t result = (uint%d_t)(EV - %d);\n", 8<<op_size, 8<<op_size, value);
+		printf("\t\tSET_C_FLAG((uint%d_t)EV < (uint%d_t)%d?1:0);\n", 8<<op_size, 8<<op_size, value);
+		printf("\t\tSET_X_FLAG((uint%d_t)EV < (uint%d_t)%d?1:0);\n", 8<<op_size, 8<<op_size, value);
+		printf("\t\tSET_V_FLAG%d(EV, -%d, result);\n", 8<<op_size, value);
+		printf("\t\tSET_N_FLAG%d(result);\n", 8<<op_size);
+		printf("\t\tSET_Z_FLAG%d(result);\n", 8<<op_size);
+	}
+	return 0;
+}
+
+void subq(int opcode)
+{
+	if ((opcode & 0xF100) != 0x5100)
+		return;
+
+	add_opcode(gen_quick("subq", opcode, subq_handler), opcode);
+}
+
 char* cc_names[] = {"t", "f", "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl", "mi", "ge", "lt", "gt", "le"};
 char* cc_up(int code)
 {
@@ -1253,6 +1381,71 @@ char* cc_up(int code)
 	for (i=0; cc_names[code][i]; ++i)
 		cc[i] = cc_names[code][i]-'a'+'A';
 	return cc;
+}
+
+void scc(int opcode)
+{
+	char func_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	int func_id;
+	int cc;
+	char* cc_str;
+
+	if ((opcode & 0xF0C0) != 0x50C0)
+		return;
+
+	if (!ea_alterable_na(opcode))
+		return;
+
+	cc = (opcode>>8)&0xF;
+
+	sprintf(func_name, "s%s_%04X", cc_names[cc], opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	if (get_ea(func_name, opcode, 0, 1) < 0)
+	{
+		add_opcode(-1, opcode);
+		return;
+	}
+
+	if (ea_address(opcode))
+	{
+		int id;
+
+		sprintf(func_name, "scc_common_%d", cc);
+		sprintf(access_name, "%s_read", func_name);
+		id = func_by_name(access_name);
+		if (id >= 0)
+		{
+			WAIT_BUS("_wait", "_read");
+			add_opcode(func_id, opcode);
+			return;
+		}
+		READ_BUS("", "EA", "EV", 0);
+	}
+
+	printf("\tif (CONDITION_%s)\n", cc_up(cc));
+	if (ea_mode(opcode) < 2)
+	{
+		printf("\t\tSET_DN_REG8(%d, 0xFF);\n", opcode&0xF);
+		printf("\telse\n", opcode&0xF);
+		printf("\t\tSET_DN_REG8(%d, 0);\n", opcode&0xF);
+		printf("\tFETCH_OPCODE;\n}\n\n");
+	}
+	else
+	{
+		printf("\t\tEV = 0xFF;\n");
+		printf("\telse\n");
+		printf("\t\tEV = 0;\n");
+
+		print_bus_wait("done_wait_wb", "done_write_wb");
+	}
+
+	add_opcode(func_id, opcode);
 }
 
 void dbcc(int opcode)
@@ -1337,6 +1530,32 @@ void bcc(int opcode)
 		printf("\t\tPC += (int8_t)%d;\n", opcode&0xFF);
 		printf("\tFETCH_OPCODE;\n}\n\n");
 	}
+	add_opcode(func_id, opcode);
+}
+
+void moveq(int opcode)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+
+	if ((opcode & 0xF100) != 0x7000)
+		return;
+
+	sprintf(func_name, "moveq_%04X", opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	printf("\tREG_D(%d) = (uint32_t)(int8_t)0x%X;\n", (opcode >> 9)&7, opcode&0xFF);
+	printf("\tSET_N_FLAG(%d);\n", (opcode&0x80)?1:0);
+	printf("\tSET_Z_FLAG(%d);\n", (opcode&0xFF)?0:1);
+	printf("\tSET_V_FLAG(0);\n");
+	printf("\tSET_C_FLAG(0);\n");
+	printf("\tFETCH_OPCODE;\n}\n\n");
+
 	add_opcode(func_id, opcode);
 }
 
@@ -1610,8 +1829,12 @@ int main(void)
 		rte(i);
 		rts(i);
 		rtr(i);
+		addq(i);
+		subq(i);
+		scc(i);
 		dbcc(i);
 		bcc(i);
+		moveq(i);
 		move(i);
 		move_fsr(i);
 		move_tcr(i);
