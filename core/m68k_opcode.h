@@ -29,6 +29,14 @@
 #define BUS_BUSY (m68k->fetched_value&1) // just to avoid optimization
 #define SUPERVISOR (SR & M68K_FLAG_S_MASK)
 
+#define SAVE_CURRENT_STACK \
+if (SUPERVISOR) m68k->reg[M68K_REG_SSP] = m68k->reg[M68K_REG_A7]; \
+else m68k->reg[M68K_REG_USP] = m68k->reg[M68K_REG_A7]
+
+#define GET_CURRENT_STACK \
+if (SUPERVISOR) m68k->reg[M68K_REG_A7] = m68k->reg[M68K_REG_SSP]; \
+else m68k->reg[M68K_REG_A7] = m68k->reg[M68K_REG_USP]
+
 #define BUS_WAIT_TIME 1
 #define READ_WAIT_TIME 4
 

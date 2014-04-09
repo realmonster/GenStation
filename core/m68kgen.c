@@ -1106,7 +1106,185 @@ void tst(int opcode)
 	add_opcode(gen_unary("tst", opcode, tst_handler), opcode);
 }
 
+void nop(int opcode)
+{
+	char func_name[MAX_NAME];
+	int func_id;
+
+	if (opcode != 0x4E71)
+		return;
+
+	sprintf(func_name, "nop_%04X", opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	printf("\tFETCH_OPCODE;\n}\n\n");
+
+	add_opcode(func_id, opcode);
+}
+
+void stop(int opcode)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+
+	if (opcode != 0x4E72)
+		return;
+
+	sprintf(func_name, "stop_%04X", opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	FETCH_BUS("", "OP", 1);
+
+	sprintf(wait_name, "%s_inf", func_name);
+	printf("\tSR = OP & M68K_FLAG_ALL;\n");
+	printf("\tTIMEOUT(1<<15, %s);\n}\n\n", wait_name);
+
+	declare_function(wait_name);
+	printf("M68K_FUNCTION(%s)\n{\n", wait_name);
+
+	printf("\tTIMEOUT(1<<15, %s);\n}\n\n", wait_name);
+
+	add_opcode(func_id, opcode);
+}
+
+void rte(int opcode)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+
+	if (opcode != 0x4E73)
+		return;
+
+	sprintf(func_name, "rte_%04X", opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	printf("\tif (!SUPERVISOR) PRIVILEGE_EXCEPTION;\n");
+
+	READ_BUS("", "REG_A(7)", "OP", 1);
+
+	READ_BUS("_pc", "REG_A(7)+2", "PC", 2);
+
+	printf("\tREG_A(7) += 6;\n");
+
+	printf("\tSAVE_CURRENT_STACK;\n");
+	printf("\tSR = OP & M68K_FLAG_ALL;\n");
+	printf("\tGET_CURRENT_STACK;\n");
+
+	printf("\tFETCH_OPCODE;\n}\n\n");
+
+	add_opcode(func_id, opcode);
+}
+
+void rts(int opcode)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+
+	if (opcode != 0x4E75)
+		return;
+
+	sprintf(func_name, "rts_%04X", opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	READ_BUS("", "REG_A(7)", "PC", 2);
+
+	printf("\tREG_A(7) += 4;\n");
+	printf("\tFETCH_OPCODE;\n}\n\n");
+
+	add_opcode(func_id, opcode);
+}
+
+void rtr(int opcode)
+{
+	char func_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	int func_id;
+
+	if (opcode != 0x4E77)
+		return;
+
+	sprintf(func_name, "rtr_%04X", opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	READ_BUS("", "REG_A(7)", "OP", 1);
+
+	printf("\tSET_DN_REG8(M68K_REG_SR, OP);\n");
+	printf("\tSR &= M68K_FLAG_ALL;\n");
+	printf("\tREG_A(7) += 2;\n");
+
+	READ_BUS("_pc", "REG_A(7)", "PC", 2);
+
+	printf("\tREG_A(7) += 4;\n");
+	printf("\tFETCH_OPCODE;\n}\n\n");
+
+	add_opcode(func_id, opcode);
+}
+
 char* cc_names[] = {"t", "f", "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl", "mi", "ge", "lt", "gt", "le"};
+char* cc_up(int code)
+{
+	static char cc[3];
+	int i;
+
+	if (code > 0xF)
+		return 0;
+	for (i=0; cc_names[code][i]; ++i)
+		cc[i] = cc_names[code][i]-'a'+'A';
+	return cc;
+}
+
+void dbcc(int opcode)
+{
+	char func_name[MAX_NAME];
+	char access_name[MAX_NAME];
+	char wait_name[MAX_NAME];
+	int func_id;
+	int cc;
+	char* cc_str;
+
+	if ((opcode & 0xF0F8) != 0x50C8)
+		return;
+
+	cc = (opcode>>8)&0xF;
+
+	sprintf(func_name, "db%s_%04X", cc_names[cc], opcode);
+
+	func_id = declare_function(func_name);
+
+	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+
+	FETCH_BUS("", "OP", 1);
+
+	printf("\tif (!(CONDITION_%s))\n\t{\n", cc_up(cc));
+	printf("\t\tSET_DN_REG16(%d, REG_D(%d)-1);\n", opcode&7, opcode&7);
+	printf("\t\tif ((int16_t)(REG_D(%d)) != -1)\n", opcode&7);
+	printf("\t\t\tPC += (int16_t)OP - 2;\n\t}\n");
+	printf("\tFETCH_OPCODE;\n}\n\n");
+
+	add_opcode(func_id, opcode);
+}
 
 void bcc(int opcode)
 {
@@ -1343,7 +1521,7 @@ int gen_move_to_ccr(const char *mnemonic, int opcode)
 	printf("M68K_FUNCTION(%s)\n{\n", func_name);
 
 	if (sr)
-		printf("if (SUPERVISOR) PRIVILEGE_EXCEPTION;\n");
+		printf("\tif (!SUPERVISOR) PRIVILEGE_EXCEPTION;\n");
 
 	if (get_ea(func_name, opcode, op_size, 1) < 0)
 		return -1;
@@ -1427,6 +1605,12 @@ int main(void)
 		swap(i);
 		ext(i);
 		tst(i);
+		nop(i);
+		stop(i);
+		rte(i);
+		rts(i);
+		rtr(i);
+		dbcc(i);
 		bcc(i);
 		move(i);
 		move_fsr(i);

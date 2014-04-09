@@ -36,11 +36,14 @@
 #define M68K_REG_A4  12
 #define M68K_REG_A5  13
 #define M68K_REG_A6  14
-#define M68K_REG_A7  15
-#define M68K_REG_USP 15 // same as A7
-#define M68K_REG_PC  16
-#define M68K_REG_SR  17
-#define M68K_REG_CCR 17 // low byte SR
+#define M68K_REG_A7  15 // SP (copy of USP or SSP depending on S flag)
+#define M68K_REG_USP 16 // valid if S flag, if not S use A7
+#define M68K_REG_SSP 17 // valid if not S flag, if S use A7
+#define M68K_REG_PC  18
+#define M68K_REG_SR  19
+#define M68K_REG_CCR 19 // low byte SR
+
+#define M68K_REG_COUNT 20
 
 #define M68K_FLAG_C_BIT 0 // carry
 #define M68K_FLAG_C_MASK (1<<0)
@@ -76,8 +79,6 @@
 
 // T-S--III---XNZVC
 #define M68K_FLAG_ALL 0xA71F
-
-#define M68K_REG_COUNT 18
 
 typedef struct m68k_context_ m68k_context;
 
