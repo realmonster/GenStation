@@ -17,6 +17,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int is_checking(int opcode)
 {
@@ -186,7 +187,18 @@ int declare_function(const char* name)
 	return func_count - 1;
 }
 
-void print_bus_wait(const char* bus_wait, const char* bus_access)
+void strconcat(char *buffer, const char *a, const char *b, size_t n)
+{
+	int la, lb;
+	la = strlen(a);
+	lb = strlen(b);
+	if (la + lb >= MAX_NAME)
+		fprintf(stderr, "Error: MAX_NAME overflow at concat: %s%s\n", a, b);
+	strcpy(buffer, a);
+	strcpy(buffer+la, b);
+}
+
+int print_bus_wait(const char* bus_wait, const char* bus_access)
 {
 	int bw, ba;
 
@@ -197,22 +209,30 @@ void print_bus_wait(const char* bus_wait, const char* bus_access)
 		printf("M68K_FUNCTION(%s) { WAIT_BUS(%s, %s); }\n\n", bus_wait, bus_wait, bus_access);
 	if (ba >= 0)
 		printf("M68K_FUNCTION(%s)\n{\n", bus_access);
+	return ba;
 }
 
-#define WAIT_BUS(bus_wait_str, bus_access_str) if (1) {\
-sprintf(wait_name, "%s" bus_wait_str, func_name); \
-sprintf(access_name, "%s" bus_access_str, func_name); \
-print_bus_wait(wait_name, access_name);\
-} else (void*)0
-
-void print_bus_read(const char* prefix, const char* address, const char* lval, int size)
+int print_bus_wait_(const char *func, const char *wait, const char *access)
 {
-	const char *func_name;
 	char wait_name[MAX_NAME];
 	char access_name[MAX_NAME];
+	strconcat(wait_name, func, wait, MAX_NAME);
+	strconcat(access_name, func, access, MAX_NAME);
+	return print_bus_wait(wait_name, access_name);
+}
+
+#define WAIT_BUS(bus_wait_str, bus_access_str) \
+print_bus_wait_(func_name, bus_wait_str, bus_access_str)
+
+int print_bus_read(const char* prefix, const char* address, const char* lval, int size)
+{
+	const char *func_name;
+	int r;
 
 	func_name = prefix;
-	WAIT_BUS("_wait", "_read");
+	r = WAIT_BUS("_wait", "_read");
+	if (r < 0)
+		return r;
 
 	switch (size)
 	{
@@ -227,26 +247,38 @@ void print_bus_read(const char* prefix, const char* address, const char* lval, i
 		case 2:
 			printf("\t%s = READ_16(%s)<<16;\n", lval, address);
 
-			WAIT_BUS("_wait2", "_read2");
+			if (WAIT_BUS("_wait2", "_read2") < 0)
+				fprintf(stderr, "Error: %s_read2 already exists\n", prefix);
 
 			printf("\t%s |= READ_16(%s + 2);\n", lval, address);
 			break;
+
+		default:
+			fprintf(stderr, "Error: invalid bus read size %d in %s\n", size, prefix);
+			break;
 	}
+	return r;
 }
 
-#define READ_BUS(str, address, lval, size) if (1) {\
-sprintf(access_name, "%s" str, func_name); \
-print_bus_read(access_name, address, lval, size);\
-} else (void*)0
+int print_bus_read_(const char *func, const char *str, const char *address, const char* lval, int size)
+{
+	char prefix[MAX_NAME];
+	strconcat(prefix, func, str, MAX_NAME);
+	return print_bus_read(prefix, address, lval, size);
+}
 
-void print_bus_write(const char* prefix, const char* address, const char* val, int size)
+#define READ_BUS(str, address, lval, size) \
+print_bus_read_(func_name, str, address, lval, size)
+
+int print_bus_write(const char* prefix, const char* address, const char* val, int size)
 {
 	const char *func_name;
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
+	int r;
 
 	func_name = prefix;
-	WAIT_BUS("_wait", "_write");
+	r = WAIT_BUS("_wait", "_write");
+	if (r < 0)
+		return r;
 
 	switch (size)
 	{
@@ -261,26 +293,38 @@ void print_bus_write(const char* prefix, const char* address, const char* val, i
 		case 2:
 			printf("\tWRITE_16(%s, (%s)>>16);\n", address, val);
 
-			WAIT_BUS("_wait2", "_write2");
+			if (WAIT_BUS("_wait2", "_write2") < 0)
+				fprintf(stderr, "Error: %s_read2 already exists\n", prefix);
 
 			printf("\tWRITE_16(%s + 2, %s);\n", address, val);
 			break;
+
+		default:
+			fprintf(stderr, "Error: invalid bus write size %d in %s\n", size, prefix);
+			break;
 	}
+	return r;
 }
 
-#define WRITE_BUS(str, address, val, size) if (1) {\
-sprintf(access_name, "%s" str, func_name); \
-print_bus_write(access_name, address, val, size);\
-} else (void*)0
+int print_bus_write_(const char *func, const char *str, const char *address, const char* val, int size)
+{
+	char prefix[MAX_NAME];
+	strconcat(prefix, func, str, MAX_NAME);
+	return print_bus_write(prefix, address, val, size);
+}
 
-void print_bus_fetch(const char* prefix, const char* lval, int size)
+#define WRITE_BUS(str, address, val, size) \
+print_bus_write_(func_name, str, address, val, size)
+
+int print_bus_fetch(const char* prefix, const char* lval, int size)
 {
 	const char *func_name;
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
+	int r;
 
 	func_name = prefix;
-	WAIT_BUS("_wait", "_read");
+	r = WAIT_BUS("_wait", "_read");
+	if (r < 0)
+		return r;
 
 	switch (size)
 	{
@@ -296,24 +340,29 @@ void print_bus_fetch(const char* prefix, const char* lval, int size)
 			printf("\t%s = READ_16(PC)<<16;\n", lval);
 			printf("\tPC += 2;\n");
 
-			WAIT_BUS("_wait2", "_read2");
+			if (WAIT_BUS("_wait2", "_read2") < 0)
+				fprintf(stderr, "Error: %s_read2 already exists\n", prefix);
 
 			printf("\t%s |= READ_16(PC);\n", lval);
 			break;
 
 		default:
 			fprintf(stderr, "Error: invalid bus fetch size %d in %s\n", size, prefix);
-			exit(0);
 			break;
 	}
 	printf("\tPC += 2;\n");
+	return r;
 }
 
-#define FETCH_BUS(str, lval, size) if (1) {\
-sprintf(access_name, "%s" str, func_name); \
-print_bus_fetch(access_name, lval, size);\
-} else (void*)0
+int print_bus_fetch_(const char *func, const char *str, const char* val, int size)
+{
+	char prefix[MAX_NAME];
+	strconcat(prefix, func, str, MAX_NAME);
+	return print_bus_fetch(prefix, val, size);
+}
 
+#define FETCH_BUS(str, lval, size) \
+print_bus_fetch_(func_name, str, lval, size)
 
 int invalid(void)
 {
@@ -322,8 +371,7 @@ int invalid(void)
 
 int get_ea(const char *func_name, int opcode, int op_size, int read)
 {
-	char wait_name[100];
-	char access_name[100];
+	char wait_name[MAX_NAME];
 
 	switch(ea_mode(opcode))
 	{
@@ -440,8 +488,6 @@ typedef int (*opcode_handler)(int opcode);
 int gen_immediate(const char *mnemonic, int opcode, opcode_handler handler)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 	int op_size;
 
@@ -455,26 +501,21 @@ int gen_immediate(const char *mnemonic, int opcode, opcode_handler handler)
 
 	printf("M68K_FUNCTION(%s)\n{\n", func_name);
 
-	FETCH_BUS("", "OP", op_size);
+	if (FETCH_BUS("", "OP", op_size) < 0)
+		return -1;
 
 	if (get_ea(func_name, opcode, op_size, 1) < 0)
 		return -1;
 
 	if (ea_address(opcode))
 	{
-		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
 		sprintf(func_name, "%s_common_%d", mnemonic, op_size);
-		sprintf(access_name, "%s_read", func_name);
-		id = func_by_name(access_name);
-		if (id >= 0)
-		{
-			WAIT_BUS("_wait", "_read");
+
+		if (READ_BUS("", "EA", "EV", op_size) < 0)
 			return func_id;
-		}
-		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	if (handler(opcode) < 0)
@@ -670,8 +711,6 @@ void cmpi(int opcode)
 int gen_bit(const char *mnemonic, int opcode, opcode_handler handler)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 	int type;
 	int dn;
@@ -698,17 +737,10 @@ int gen_bit(const char *mnemonic, int opcode, opcode_handler handler)
 
 	if (ea_address(opcode))
 	{
-		int id;
-
 		sprintf(func_name, "%s_common", mnemonic);
-		sprintf(access_name, "%s_read", func_name);
-		id = func_by_name(access_name);
-		if (id >= 0)
-		{
-			WAIT_BUS("_wait", "_read");
+
+		if (READ_BUS("", "EA", "EV", 0) < 0)
 			return func_id;
-		}
-		READ_BUS("", "EA", "EV", 0);
 	}
 
 	if (handler(opcode) < 0)
@@ -858,8 +890,6 @@ void bset(int opcode)
 int gen_unary(const char *mnemonic, int opcode, opcode_handler handler)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 	int op_size;
 
@@ -878,19 +908,13 @@ int gen_unary(const char *mnemonic, int opcode, opcode_handler handler)
 
 	if (ea_address(opcode))
 	{
-		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
 		sprintf(func_name, "%s_common_%d", mnemonic, op_size);
-		sprintf(access_name, "%s_read", func_name);
-		id = func_by_name(access_name);
-		if (id >= 0)
-		{
-			WAIT_BUS("_wait", "_read");
+
+		if (READ_BUS("", "EA", "EV", op_size) < 0)
 			return func_id;
-		}
-		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	if (handler(opcode) < 0)
@@ -1129,7 +1153,6 @@ void stop(int opcode)
 {
 	char func_name[MAX_NAME];
 	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 
 	if (opcode != 0x4E72)
@@ -1160,8 +1183,6 @@ void stop(int opcode)
 void rte(int opcode)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 
 	if (opcode != 0x4E73)
@@ -1193,8 +1214,6 @@ void rte(int opcode)
 void rts(int opcode)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 
 	if (opcode != 0x4E75)
@@ -1217,8 +1236,6 @@ void rts(int opcode)
 void rtr(int opcode)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 
 	if (opcode != 0x4E77)
@@ -1247,8 +1264,6 @@ void rtr(int opcode)
 int gen_quick(const char *mnemonic, int opcode, opcode_handler handler)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 	int op_size;
 
@@ -1272,19 +1287,13 @@ int gen_quick(const char *mnemonic, int opcode, opcode_handler handler)
 
 	if (ea_address(opcode))
 	{
-		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
 		sprintf(func_name, "%s_common_%02X", mnemonic, (op_size<<3)|((opcode>>9)&7));
-		sprintf(access_name, "%s_read", func_name);
-		id = func_by_name(access_name);
-		if (id >= 0)
-		{
-			WAIT_BUS("_wait", "_read");
+
+		if (READ_BUS("", "EA", "EV", op_size) < 0)
 			return func_id;
-		}
-		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	if (handler(opcode) < 0)
@@ -1386,8 +1395,6 @@ char* cc_up(int code)
 void scc(int opcode)
 {
 	char func_name[MAX_NAME];
-	char access_name[MAX_NAME];
-	char wait_name[MAX_NAME];
 	int func_id;
 	int cc;
 	char* cc_str;
@@ -1414,18 +1421,13 @@ void scc(int opcode)
 
 	if (ea_address(opcode))
 	{
-		int id;
-
 		sprintf(func_name, "scc_common_%d", cc);
-		sprintf(access_name, "%s_read", func_name);
-		id = func_by_name(access_name);
-		if (id >= 0)
+
+		if (READ_BUS("", "EA", "EV", 0) < 0)
 		{
-			WAIT_BUS("_wait", "_read");
 			add_opcode(func_id, opcode);
 			return;
 		}
-		READ_BUS("", "EA", "EV", 0);
 	}
 
 	printf("\tif (CONDITION_%s)\n", cc_up(cc));
@@ -1451,8 +1453,6 @@ void scc(int opcode)
 void dbcc(int opcode)
 {
 	char func_name[MAX_NAME];
-	char access_name[MAX_NAME];
-	char wait_name[MAX_NAME];
 	int func_id;
 	int cc;
 	char* cc_str;
@@ -1482,8 +1482,6 @@ void dbcc(int opcode)
 void bcc(int opcode)
 {
 	char func_name[MAX_NAME];
-	char access_name[MAX_NAME];
-	char wait_name[MAX_NAME];
 	int func_id;
 	int cc;
 	char* cc_str;
@@ -1536,8 +1534,6 @@ void bcc(int opcode)
 void moveq(int opcode)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 
 	if ((opcode & 0xF100) != 0x7000)
@@ -1562,7 +1558,6 @@ void moveq(int opcode)
 int gen_move(const char *mnemonic, int opcode)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
 	char access_name[MAX_NAME];
 	int func_id;
 	int op_size;
@@ -1590,19 +1585,12 @@ int gen_move(const char *mnemonic, int opcode)
 
 	if (ea_address(opcode))
 	{
-		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
 		sprintf(func_name, "%s_common_%02X", mnemonic, (op_size<<6)|op_dest);
-		sprintf(access_name, "%s_read", func_name);
-		id = func_by_name(access_name);
-		if (id >= 0)
-		{
-			WAIT_BUS("_wait", "_read");
+		if (READ_BUS("", "EA", "EV", op_size) < 0)
 			return func_id;
-		}
-		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	printf("\t{\n\t\tuint%d_t result = EV;\n", 8<<op_size);
@@ -1650,8 +1638,6 @@ void move(int opcode)
 int gen_move_from_sr(const char *mnemonic, int opcode)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 	int op_size;
 
@@ -1675,19 +1661,12 @@ int gen_move_from_sr(const char *mnemonic, int opcode)
 
 	if (ea_address(opcode))
 	{
-		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
 		sprintf(func_name, "%s_fsr_common", mnemonic);
-		sprintf(access_name, "%s_read", func_name);
-		id = func_by_name(access_name);
-		if (id >= 0)
-		{
-			WAIT_BUS("_wait", "_read");
+		if (READ_BUS("", "EA", "EV", op_size) < 0)
 			return func_id;
-		}
-		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	if (ea_mode(opcode)<2)
@@ -1719,8 +1698,6 @@ void move_fsr(int opcode)
 int gen_move_to_ccr(const char *mnemonic, int opcode)
 {
 	char func_name[MAX_NAME];
-	char wait_name[MAX_NAME];
-	char access_name[MAX_NAME];
 	int func_id;
 	int op_size;
 	int op_dest;
@@ -1747,7 +1724,6 @@ int gen_move_to_ccr(const char *mnemonic, int opcode)
 
 	if (ea_address(opcode))
 	{
-		int id;
 		if (op_size)
 			printf("\tif (EA&1) ADDRESS_EXCEPTION;\n");
 
@@ -1755,14 +1731,8 @@ int gen_move_to_ccr(const char *mnemonic, int opcode)
 			sprintf(func_name, "%s_sr_common", mnemonic);
 		else
 			sprintf(func_name, "%s_tcr_common", mnemonic);
-		sprintf(access_name, "%s_read", func_name);
-		id = func_by_name(access_name);
-		if (id >= 0)
-		{
-			WAIT_BUS("_wait", "_read");
+		if (READ_BUS("", "EA", "EV", op_size) < 0)
 			return func_id;
-		}
-		READ_BUS("", "EA", "EV", op_size);
 	}
 
 	if (sr)
