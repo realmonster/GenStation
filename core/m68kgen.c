@@ -187,29 +187,39 @@ int declare_function(const char* name)
 	return func_count - 1;
 }
 
-void strconcat(char *buffer, const char *a, const char *b, size_t n)
+int begin_function(const char* name)
+{
+	int func_id = declare_function(name);
+	if (func_id >= 0)
+		printf("M68K_FUNCTION(%s)\n{\n", name);
+	return func_id;
+}
+
+void end_function()
+{
+	printf("}\n\n");
+}
+
+void strconcat(char *buffer, const char *a, const char *b, size_t max_len)
 {
 	int la, lb;
 	la = strlen(a);
 	lb = strlen(b);
-	if (la + lb >= MAX_NAME)
-		fprintf(stderr, "Error: MAX_NAME overflow at concat: %s%s\n", a, b);
+	if (la + lb >= max_len)
+		fprintf(stderr, "Error: max length overflow at concat: %s%s\n", a, b);
 	strcpy(buffer, a);
 	strcpy(buffer+la, b);
 }
 
 int print_bus_wait(const char* bus_wait, const char* bus_access)
 {
-	int bw, ba;
+	int bw = declare_function(bus_wait);
 
-	bw = declare_function(bus_wait);
-	ba = declare_function(bus_access);
 	printf("\tWAIT_BUS(%s, %s);\n}\n\n", bus_wait, bus_access);
 	if (bw >= 0)
 		printf("M68K_FUNCTION(%s) { WAIT_BUS(%s, %s); }\n\n", bus_wait, bus_wait, bus_access);
-	if (ba >= 0)
-		printf("M68K_FUNCTION(%s)\n{\n", bus_access);
-	return ba;
+
+	return begin_function(bus_access);
 }
 
 int print_bus_wait_(const char *func, const char *wait, const char *access)
@@ -364,6 +374,84 @@ int print_bus_fetch_(const char *func, const char *str, const char* val, int siz
 #define FETCH_BUS(str, lval, size) \
 print_bus_fetch_(func_name, str, lval, size)
 
+void opcode_read()
+{
+	char* func_name = "opcode";
+
+	if (FETCH_BUS("", "m68k->opcode", 1) < 0)
+		return;
+
+	printf("\tm68k_opcode_table[m68k->opcode](m68k);\n}\n\n");
+}
+
+void reset_exception()
+{
+	const char* func_name = "reset_exception";
+
+	begin_function(func_name);
+
+	printf("\tif (!SUPERVISOR) USP = SP;\n");
+
+	READ_BUS("", "0", "REG_A(7)", 2);
+
+	READ_BUS("_pc", "4", "PC", 2);
+
+	printf("\tSR = M68K_FLAG_S_MASK | M68K_FLAG_I0_MASK | M68K_FLAG_I1_MASK | M68K_FLAG_I2_MASK;\n");
+
+	printf("\tif (PC&1) ADDRESS_EXCEPTION;\n");
+	opcode_read();
+}
+
+void address_exception()
+{
+	const char* func_name = "address_exception";
+
+	begin_function(func_name);
+
+	printf("\tif (!SUPERVISOR) {USP = SP; SP = SSP;}\n");
+
+	printf("\tif (SP&1) HALT;\n");
+
+	WRITE_BUS("_pcl", "SP-2", "PC", 1);
+	WRITE_BUS("_sr" , "SP-6", "SR", 1);
+	WRITE_BUS("_pch", "SP-4", "PC>>16", 1);
+	WRITE_BUS("_op" , "SP-8", "m68k->opcode", 1);
+	WRITE_BUS("_eal", "SP-10", "EA", 1);
+	WRITE_BUS("_fc" , "SP-14", "0", 1);
+	WRITE_BUS("_eah", "SP-12", "EA>>16", 1);
+
+	READ_BUS("_vec", "12", "PC", 2);
+
+	printf("\tif (PC&1) HALT;\n");
+	printf("\tSR = (SR | M68K_FLAG_S_MASK) & (~M68K_FLAG_T1_MASK);\n");
+	printf("\tSP -= 14;\n");
+
+	opcode_read();
+}
+
+void interrupt()
+{
+	const char* func_name = "interrupt";
+
+	begin_function(func_name);
+
+	printf("\tif (!SUPERVISOR) {USP = SP; SP = SSP;}\n");
+
+	printf("\tif (SP&1) HALT;\n");
+
+	WRITE_BUS("_pcl", "SP-2", "PC", 1);
+	WRITE_BUS("_sr" , "SP-6", "SR", 1);
+	WRITE_BUS("_pch", "SP-4", "PC>>16", 1);
+
+	READ_BUS("_vec", "OP*4", "PC", 2);
+
+	printf("\tSR = (SR | M68K_FLAG_S_MASK) & (~M68K_FLAG_T1_MASK);\n");
+	printf("\tSP -= 6;\n");
+	printf("\tif (PC&1) ADDRESS_EXCEPTION;\n");
+
+	opcode_read();
+}
+
 int invalid(void)
 {
 	return func_by_name("invalid");
@@ -404,8 +492,7 @@ int get_ea(const char *func_name, int opcode, int op_size, int read)
 				sprintf(wait_name, "%s_wait_pre", func_name);
 				printf("\tTIMEOUT(2, %s);\n}\n\n", wait_name);
 
-				declare_function(wait_name);
-				printf("M68K_FUNCTION(%s)\n{\n",wait_name);
+				begin_function(wait_name);
 			}
 
 			if (op_size == 0 && (opcode&7) == 7) // sp
@@ -435,11 +522,9 @@ int get_ea(const char *func_name, int opcode, int op_size, int read)
 			printf("\tEA = READ_16(PC);\n");
 
 			sprintf(wait_name, "%s_wait_d8_sum", func_name);
-			declare_function(wait_name);
-
 			printf("\tTIMEOUT(2, %s);\n}\n\n", wait_name);
 
-			printf("M68K_FUNCTION(%s)\n{\n", wait_name);
+			begin_function(wait_name);
 			printf(
 "	if (EA & 0x800)\n"
 "		EA = (uint32_t)(int8_t)EA\n"
@@ -497,9 +582,7 @@ int gen_immediate(const char *mnemonic, int opcode, opcode_handler handler)
 
 	sprintf(func_name, "%s_%04X", mnemonic, opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	if (FETCH_BUS("", "OP", op_size) < 0)
 		return -1;
@@ -723,9 +806,7 @@ int gen_bit(const char *mnemonic, int opcode, opcode_handler handler)
 
 	sprintf(func_name, "%s_%04X", mnemonic, opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	if (type)
 		printf("\tOP = REG_D(%d);\n", dn);
@@ -899,9 +980,7 @@ int gen_unary(const char *mnemonic, int opcode, opcode_handler handler)
 
 	sprintf(func_name, "%s_%04X", mnemonic, opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	if (get_ea(func_name, opcode, op_size, 1) < 0)
 		return -1;
@@ -1063,9 +1142,8 @@ void swap(int opcode)
 
 	sprintf(func_name, "swap_%04X", opcode);
 
-	func_id = declare_function(func_name);
+	func_id = begin_function(func_name);
 
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
 	printf("\tuint32_t result = (((uint32_t)REG_D(%d))>>16)|(((uint32_t)REG_D(%d))<<16);\n", opcode&7, opcode&7);
 	printf("\tSET_N_FLAG32(result);\n");
 	printf("\tSET_Z_FLAG32(result);\n");
@@ -1089,9 +1167,8 @@ void ext(int opcode)
 
 	sprintf(func_name, "ext_%04X", opcode);
 
-	func_id = declare_function(func_name);
+	func_id = begin_function(func_name);
 
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
 	printf("\tuint%d_t result = (int%d_t)REG_D(%d);\n", 8<<op_size, 8<<(op_size-1), opcode&7);
 	printf("\tSET_N_FLAG%d(result);\n", 8<<op_size);
 	printf("\tSET_Z_FLAG%d(result);\n", 8<<op_size);
@@ -1140,9 +1217,7 @@ void nop(int opcode)
 
 	sprintf(func_name, "nop_%04X", opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	printf("\tFETCH_OPCODE;\n}\n\n");
 
@@ -1160,9 +1235,7 @@ void stop(int opcode)
 
 	sprintf(func_name, "stop_%04X", opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	printf("\tif (!SUPERVISOR) PRIVILEGE_EXCEPTION;\n");
 
@@ -1172,8 +1245,7 @@ void stop(int opcode)
 	printf("\tSR = OP & M68K_FLAG_ALL;\n");
 	printf("\tTIMEOUT(1<<15, %s);\n}\n\n", wait_name);
 
-	declare_function(wait_name);
-	printf("M68K_FUNCTION(%s)\n{\n", wait_name);
+	begin_function(wait_name);
 
 	printf("\tTIMEOUT(1<<15, %s);\n}\n\n", wait_name);
 
@@ -1190,9 +1262,7 @@ void rte(int opcode)
 
 	sprintf(func_name, "rte_%04X", opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	printf("\tif (!SUPERVISOR) PRIVILEGE_EXCEPTION;\n");
 
@@ -1221,9 +1291,7 @@ void rts(int opcode)
 
 	sprintf(func_name, "rts_%04X", opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	READ_BUS("", "REG_A(7)", "PC", 2);
 
@@ -1243,9 +1311,7 @@ void rtr(int opcode)
 
 	sprintf(func_name, "rtr_%04X", opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	READ_BUS("", "REG_A(7)", "OP", 1);
 
@@ -1278,9 +1344,7 @@ int gen_quick(const char *mnemonic, int opcode, opcode_handler handler)
 
 	sprintf(func_name, "%s_%04X", mnemonic, opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	if (get_ea(func_name, opcode, op_size, 1) < 0)
 		return -1;
@@ -1409,9 +1473,7 @@ void scc(int opcode)
 
 	sprintf(func_name, "s%s_%04X", cc_names[cc], opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	if (get_ea(func_name, opcode, 0, 1) < 0)
 	{
@@ -1464,9 +1526,7 @@ void dbcc(int opcode)
 
 	sprintf(func_name, "db%s_%04X", cc_names[cc], opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	FETCH_BUS("", "OP", 1);
 
@@ -1499,9 +1559,7 @@ void bcc(int opcode)
 
 	sprintf(func_name, "b%s_%04X", cc_str, opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	if ((opcode & 0xFF) == 0)
 	{
@@ -1541,9 +1599,7 @@ void moveq(int opcode)
 
 	sprintf(func_name, "moveq_%04X", opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	printf("\tREG_D(%d) = (uint32_t)(int8_t)0x%X;\n", (opcode >> 9)&7, opcode&0xFF);
 	printf("\tSET_N_FLAG(%d);\n", (opcode&0x80)?1:0);
@@ -1576,9 +1632,7 @@ int gen_move(const char *mnemonic, int opcode)
 
 	sprintf(func_name, "%s_%04X", mnemonic, opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	if (get_ea(func_name, opcode, op_size, 1) < 0)
 		return -1;
@@ -1649,9 +1703,7 @@ int gen_move_from_sr(const char *mnemonic, int opcode)
 
 	sprintf(func_name, "%s_%04X", mnemonic, opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	if (ea_address(opcode))
 	{
@@ -1712,9 +1764,7 @@ int gen_move_to_ccr(const char *mnemonic, int opcode)
 
 	sprintf(func_name, "%s_%04X", mnemonic, opcode);
 
-	func_id = declare_function(func_name);
-
-	printf("M68K_FUNCTION(%s)\n{\n", func_name);
+	func_id = begin_function(func_name);
 
 	if (sr)
 		printf("\tif (!SUPERVISOR) PRIVILEGE_EXCEPTION;\n");
@@ -1758,6 +1808,13 @@ int main(void)
 
 	hash_init();
 
+	printf("#include \"m68k_opcode.h\"\n");
+	printf("#include \"m68k_optable.h\"\n\n");
+
+	reset_exception();
+	address_exception();
+	interrupt();
+
 	declare_function("invalid");
 	declare_function("done_wait_wb");
 	declare_function("done_wait_ww");
@@ -1771,8 +1828,6 @@ int main(void)
 	declare_function("opcode_wait");
 	declare_function("opcode_read");
 
-	printf("#include \"m68k_opcode.h\"\n");
-	printf("#include \"m68k_optable.h\"\n\n");
 
 	for (i=0; i<0x10000; ++i)
 	{

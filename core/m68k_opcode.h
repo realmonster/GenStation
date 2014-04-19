@@ -23,25 +23,29 @@
 #include "m68k_optable.h"
 
 #define INVALID invalid(m68k)
-#define ADDRESS_EXCEPTION INVALID
+#define ADDRESS_EXCEPTION if (1) TIMEOUT(50-4*(4+7), address_exception); else (void*)0
 #define PRIVILEGE_EXCEPTION INVALID
+#define HALT
 
 #define BUS_BUSY (m68k->fetched_value&1) // just to avoid optimization
 #define SUPERVISOR (SR & M68K_FLAG_S_MASK)
 
 #define SAVE_CURRENT_STACK \
-if (SUPERVISOR) m68k->reg[M68K_REG_SSP] = m68k->reg[M68K_REG_A7]; \
-else m68k->reg[M68K_REG_USP] = m68k->reg[M68K_REG_A7]
+if (SUPERVISOR) SSP = SP; \
+else USP = SP
 
 #define GET_CURRENT_STACK \
-if (SUPERVISOR) m68k->reg[M68K_REG_A7] = m68k->reg[M68K_REG_SSP]; \
-else m68k->reg[M68K_REG_A7] = m68k->reg[M68K_REG_USP]
+if (SUPERVISOR) SP = SSP; \
+else SP = USP
 
 #define BUS_WAIT_TIME 1
 #define READ_WAIT_TIME 4
 
 #define PC (m68k->reg[M68K_REG_PC])
 #define SR (m68k->reg[M68K_REG_SR])
+#define SP (m68k->reg[M68K_REG_A7])
+#define USP (m68k->reg[M68K_REG_USP])
+#define SSP (m68k->reg[M68K_REG_SSP])
 #define EA (m68k->effective_address)
 #define EV (m68k->effective_value)
 #define OP (m68k->operand)
